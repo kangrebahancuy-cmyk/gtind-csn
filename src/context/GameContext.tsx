@@ -854,7 +854,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
-        ws.onmessage = (event) => {
+        ws.onmessage = async (event) => {
           try {
             const data = JSON.parse(event.data);
             if (data.type === 'INIT_STATE') {
