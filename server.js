@@ -98,7 +98,19 @@ installEconomyRoutes(app, {
   broadcast,
 });
 
-const installGamesPromise = installGameRoutes(app, { sessionUser, debitForGame, creditGameResult }, { broadcast });
+const installGamesPromise = installGameRoutes(app, {
+  sessionUser,
+  debitForGame: async (...args) => {
+    const result = await debitForGame(...args);
+    if (result?.ok) broadcast({ type: 'LIVE_BET', payload: { referenceId: result.referenceId, gameId: args[2], userId: args[0], amountDls: args[1], timestamp: Date.now() } });
+    return result;
+  },
+  creditGameResult: async (...args) => {
+    const result = await creditGameResult(...args);
+    if (result?.ok && !result.duplicate) broadcast({ type: 'GAME_SETTLED', payload: { userId: args[0], amountDls: args[1], gameId: args[2]?.gameId || 'unknown', timestamp: Date.now() } });
+    return result;
+  }
+}, { broadcast });
 
 // Real-Time WebSocket Server
 const wss = new WebSocketServer({ server, path: '/ws' });
