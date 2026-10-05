@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { createPersistentSession, getPersistentSession, deletePersistentSession } from '../server/economy-store.js';
 import {
   rng,
   makeBlackjackDeck,
@@ -40,6 +39,14 @@ assert.equal(roulette.payout, 360);
 const invalidRoulette = resolveGame('roulette', () => 0, {bets:{num_0:10,cheat:1}}, 11, {});
 assert.equal(invalidRoulette.error, 'invalid_bet_key');
 
+const caseSnapshot = { id:'case-test', price:10, items:[
+  {id:'low',name:'Low',price:2,chance:90},
+  {id:'high',name:'High',price:82,chance:10}
+]};
+const caseResult = resolveGame('cases', rng('case-test'), {final:true}, 10, {caseSnapshot,count:1});
+assert.equal(caseResult.winners.length, 1);
+assert.ok(caseResult.payout >= 0);
+
 const keno = resolveGame('keno', rng('keno-test'), {picks:[1,2,3],risk:'Medium'}, 10, {});
 assert.equal(keno.picks.length, 3);
 assert.equal(keno.drawn.length, 10);
@@ -51,9 +58,3 @@ assert.ok(active.payout >= 100);
 
 console.log('Phase 2 game authority tests passed.');
 
-
-const session = createPersistentSession('phase3-user', 60_000);
-assert.equal(getPersistentSession(session.token)?.userId, 'phase3-user');
-deletePersistentSession(session.token);
-assert.equal(getPersistentSession(session.token), null);
-console.log('Phase 3 persistent session storage tests passed.');

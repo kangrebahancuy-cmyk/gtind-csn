@@ -21,24 +21,8 @@ function ensure() {
   if (!fs.existsSync(CASE_FILE)) fs.writeFileSync(CASE_FILE, JSON.stringify([], null, 2));
   if (!fs.existsSync(CASE_BATTLE_FILE)) fs.writeFileSync(CASE_BATTLE_FILE, JSON.stringify([], null, 2));
 }
-function persistCases(){ensure();fs.writeFileSync(CASE_FILE+'.tmp',JSON.stringify([...caseCatalog.values()],null,2));fs.renameSync(CASE_FILE+'.tmp',CASE_FILE);}
-function loadCases(){ensure();try{const rows=JSON.parse(fs.readFileSync(CASE_FILE,'utf8'));if(Array.isArray(rows))rows.forEach(c=>caseCatalog.set(String(c.id),c));}catch{}}
-function persistCaseBattles(){ensure();fs.writeFileSync(CASE_BATTLE_FILE+'.tmp',JSON.stringify([...caseBattles.values()].slice(-2000),null,2));fs.renameSync(CASE_BATTLE_FILE+'.tmp',CASE_BATTLE_FILE);}
-function loadCaseBattles(){ensure();try{const rows=JSON.parse(fs.readFileSync(CASE_BATTLE_FILE,'utf8'));if(Array.isArray(rows))rows.forEach(b=>caseBattles.set(b.id,b));}catch{}}
-loadCases();
-loadCaseBattles();
-function persist() {
-  ensure();
-  fs.writeFileSync(FILE + '.tmp', JSON.stringify([...rounds.values()].slice(-5000), null, 2));
-  fs.renameSync(FILE + '.tmp', FILE);
-}
-function load() {
-  ensure();
-  try {
-    const rows = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-    if (Array.isArray(rows)) rows.forEach(r => rounds.set(r.id, r));
-  } catch {}
-}
+function persistCases() {}
+function load() {}
 load();
 
 function id() { return 'rnd_' + Date.now() + '_' + crypto.randomBytes(6).toString('hex'); }
@@ -76,27 +60,31 @@ async function mongoClaimLease(name, owner, ttlMs){
   return r?.owner===owner;
 }
 
-export function installGameRoutes(app, economy, options = {}) {
+export async function installGameRoutes(app, economy, options = {}) {
   const broadcast = typeof options.broadcast === 'function' ? options.broadcast : () => {};
   const instanceId = crypto.randomUUID();
   const persistCrash = () => {
-    ensure();
-    const safe={...crashGlobal,players:[...crashGlobal.players.values()]};
-    fs.writeFileSync(CRASH_FILE+'.tmp',JSON.stringify(safe,null,2));
-    fs.renameSync(CRASH_FILE+'.tmp',CRASH_FILE);
     void (async()=>{try{
       const db=await getMongoDb();
-      await db.collection('crashRounds').replaceOne({id:crashGlobal.roundId},{id:crashGlobal.roundId,phase:crashGlobal.phase,countdown:crashGlobal.countdown,multiplier:crashGlobal.multiplier,crashPoint:crashGlobal.crashPoint,serverSeed:crashGlobal.serverSeed,serverSeedHash:crashGlobal.serverSeedHash,startedAt:crashGlobal.startedAt,bettingStartedAt:crashGlobal.bettingStartedAt,history:crashGlobal.history,nextRoundAt:crashGlobal.nextRoundAt,updatedAt:Date.now()},{upsert:true});
-      const players=db.collection('crashPlayers');
-      for(const p of crashGlobal.players.values()) await players.replaceOne({roundId:p.roundId,userId:p.userId},{...p,roundId:p.roundId,updatedAt:Date.now()},{upsert:true});
+      await db.collection('crashRounds').replaceOne(
+        {id:crashGlobal.roundId},
+        {id:crashGlobal.roundId,phase:crashGlobal.phase,countdown:crashGlobal.countdown,multiplier:crashGlobal.multiplier,crashPoint:crashGlobal.crashPoint,serverSeed:crashGlobal.serverSeed,serverSeedHash:crashGlobal.serverSeedHash,startedAt:crashGlobal.startedAt,bettingStartedAt:crashGlobal.bettingStartedAt,history:crashGlobal.history,nextRoundAt:crashGlobal.nextRoundAt,updatedAt:Date.now()},
+        {upsert:true}
+      );
     }catch{} })();
   };
-  const loadCrash = () => {
-    ensure();
+  const loadCrash = async () => {
     try {
-      const saved=JSON.parse(fs.readFileSync(CRASH_FILE,'utf8'));
-      if(!saved?.roundId)return false;
-      Object.assign(crashGlobal,saved); crashGlobal.players=new Map((saved.players||[]).map(p=>[p.userId,p]));
+      const db=await getMongoDb();
+      const saved=await db.collection('crashRounds').findOne({}, {sort:{updatedAt:-1}});
+      if(!saved?.id)return false;
+      Object.assign(crashGlobal,{
+        roundId:saved.id,phase:saved.phase,countdown:saved.countdown,multiplier:saved.multiplier,
+        crashPoint:saved.crashPoint,serverSeed:saved.serverSeed,serverSeedHash:saved.serverSeedHash,
+        startedAt:saved.startedAt,bettingStartedAt:saved.bettingStartedAt,history:saved.history||[],nextRoundAt:saved.nextRoundAt||0
+      });
+      const players=await db.collection('crashPlayers').find({roundId:crashGlobal.roundId}).toArray();
+      crashGlobal.players=new Map(players.map(({_id,...p})=>[p.userId,p]));
       return true;
     } catch { return false; }
   };
@@ -136,7 +124,9 @@ export function installGameRoutes(app, economy, options = {}) {
   };
   const timer=setInterval(()=>{void crashTick();},100);
   if(typeof timer.unref==='function')timer.unref();
-  if(!loadCrash()) startCrashRound();
+  if(!(await loadCrash())) {
+    if(await mongoClaimLease('crash-global-leader',instanceId,1500)) startCrashRound();
+  }
   if(crashGlobal.phase==='crashed' && crashGlobal.nextRoundAt<=Date.now()) startCrashRound();
   function generateCrashPoint(seed){ return crashPointFromSeed(seed); }
   if(crashGlobal.phase==='flying' && Date.now()-crashGlobal.startedAt>0){
@@ -207,7 +197,10 @@ export function installGameRoutes(app, economy, options = {}) {
     next();
   });
 
-  app.get('/api/games/cases/catalog', async (req,res) =>res.json({ok:true,cases:[...caseCatalog.values()]}));
+  app.get('/api/games/cases/catalog', async (req,res) => {
+    const docs=await (await getMongoDb()).collection('caseCatalog').find({}).sort({name:1}).toArray();
+    res.json({ok:true,cases:docs.map(({_id,...c})=>c)});
+  });
   app.post('/api/games/cases/catalog', async (req,res) =>{
     const user=await requireUser(req,res);if(!user)return;
     if(!user.isAdmin)return res.status(403).json({ok:false,error:'admin_required'});
@@ -218,9 +211,9 @@ export function installGameRoutes(app, economy, options = {}) {
     const normalized=items.map(x=>({...x,chance:Number((x.chance/total*100).toFixed(6))}));
     const price=Number(c.price)||Number(normalized.reduce((n,x)=>n+x.price*x.chance/100,0).toFixed(6));
     const safe={id:String(c.id),name:String(c.name),image:String(c.image||''),color:String(c.color||''),price,volatility:String(c.volatility||'Medium'),creator:String(c.creator||user.username),openedTimes:Number(c.openedTimes)||0,items:normalized};
-    caseCatalog.set(safe.id,safe);persistCases();res.json({ok:true,case:safe});
+    await (await getMongoDb()).collection('caseCatalog').replaceOne({id:safe.id},safe,{upsert:true}); caseCatalog.set(safe.id,safe); res.json({ok:true,case:safe});
   });
-  app.delete('/api/games/cases/catalog/:id', async (req,res) =>{const user=await requireUser(req,res);if(!user)return;if(!user.isAdmin)return res.status(403).json({ok:false,error:'admin_required'});caseCatalog.delete(String(req.params.id));persistCases();res.json({ok:true});});
+  app.delete('/api/games/cases/catalog/:id', async (req,res) =>{const user=await requireUser(req,res);if(!user)return;if(!user.isAdmin)return res.status(403).json({ok:false,error:'admin_required'});await (await getMongoDb()).collection('caseCatalog').deleteOne({id:String(req.params.id)}); caseCatalog.delete(String(req.params.id)); res.json({ok:true});});
   app.get('/api/games/case-battles/lobby', async (req,res) => {
     const battleDocs=await (await getMongoDb()).collection('caseBattles').find({status:'open',createdAt:{$gt:Date.now()-10*60*1000}}).sort({createdAt:-1}).limit(100).toArray();
     const battles=battleDocs.map(({_id,...b})=>publicCaseBattle(b,true));
@@ -233,7 +226,7 @@ export function installGameRoutes(app, economy, options = {}) {
     if(config!=='1v1')return res.status(400).json({ok:false,error:'only_1v1_is_currently_supported'});
     const ids=Array.isArray(req.body?.caseIds)?req.body.caseIds.map(String):[];
     if(!ids.length||ids.length>20)return res.status(400).json({ok:false,error:'invalid_cases'});
-    const cases=ids.map(x=>caseCatalog.get(x));
+    const caseDocs=await (await getMongoDb()).collection('caseCatalog').find({id:{$in:ids}}).toArray(); const caseMap=new Map(caseDocs.map(c=>[String(c.id),c])); const cases=ids.map(x=>caseMap.get(x));
     if(cases.some(x=>!x))return res.status(400).json({ok:false,error:'case_not_found'});
     const betDls=Number(cases.reduce((n,x)=>n+Number(x.price||0),0).toFixed(2));
     if(!Number.isFinite(betDls)||betDls<=0)return res.status(400).json({ok:false,error:'invalid_battle_value'});
@@ -292,7 +285,7 @@ export function installGameRoutes(app, economy, options = {}) {
 
   app.post('/api/games/case-battles/cancel', async (req,res) => {
     const user=await requireUser(req,res);if(!user)return;
-    const battle=caseBattles.get(String(req.body?.battleId||''));
+    const battle=await mongoGetState('caseBattles',String(req.body?.battleId||''));
     if(!battle)return res.status(404).json({ok:false,error:'battle_not_found'});
     if(battle.status!=='open')return res.status(409).json({ok:false,error:'battle_not_open'});
     if(battle.creator.userId!==user.id)return res.status(403).json({ok:false,error:'creator_required'});
@@ -314,9 +307,17 @@ export function installGameRoutes(app, economy, options = {}) {
     if (!SERVER_AUTH_GAMES.has(gameId)) return res.status(409).json({ok:false,error:'game_not_server_authoritative'});
     if (gameId==='case-battles') return res.status(410).json({ok:false,error:'use_case_battles_pvp_endpoint'});
     if (!gameId || !Number.isFinite(betDls) || betDls<=0 || betDls>100000000) return res.status(400).json({ok:false,error:'invalid_bet'});
-    if(gameId==='cases'){const c=caseCatalog.get(String(req.body?.caseId||''));const count=Math.max(1,Math.min(4,Number(req.body?.count)||1));if(!c)return res.status(400).json({ok:false,error:'case_not_found'});if(Math.abs(c.price*count-betDls)>0.01)return res.status(400).json({ok:false,error:'case_price_mismatch'});}
+    let caseMap = new Map();
+    if (gameId === 'cases') {
+      const caseId = String(req.body?.caseId || '');
+      const docs = await (await getMongoDb()).collection('caseCatalog').find({id:caseId}).toArray();
+      caseMap = new Map(docs.map(c => [String(c.id), c]));
+      const c = caseMap.get(caseId);
+      const count = Math.max(1, Math.min(4, Number(req.body?.count) || 1));
+      if (!c) return res.status(400).json({ok:false,error:'case_not_found'});
+      if (Math.abs(c.price * count - betDls) > 0.01) return res.status(400).json({ok:false,error:'case_price_mismatch'});
+    }
     if(gameId==='crash')return res.status(410).json({ok:false,error:'use_global_crash_endpoint'});
-    if(gameId==='case-battles'){const ids=Array.isArray(req.body?.caseIds)?req.body.caseIds.map(String):[String(req.body?.caseId||'')];const cs=ids.map(id=>caseCatalog.get(id));if(!cs.length||cs.some(c=>!c))return res.status(400).json({ok:false,error:'case_not_found'});const total=cs.reduce((n,c)=>n+Number(c.price||0),0);if(Math.abs(total-betDls)>0.01)return res.status(400).json({ok:false,error:'battle_price_mismatch'});}
     const result=await economy.debitForGame(user.id,betDls,gameId);
     if (!result.ok) return res.status(400).json({ok:false,error:result.error});
     const serverSeed=crypto.randomBytes(32).toString('hex');
@@ -327,8 +328,7 @@ export function installGameRoutes(app, economy, options = {}) {
       serverSeed,serverSeedHash:commitment,clientSeed,nonce,createdAt:new Date().toISOString(),balanceAfterBet:result.balance};
     if (gameId==='blackjack') { const initial=startBlackjack(round); round.initialResult=initial; }
     if (gameId==='crash') { const rr=rng(serverSeed+':crash'); const x=rr(); round.state={startedAt:Date.now()+5000,crashPoint:x<0.01?1:Number(Math.max(1,0.99/(1-x)).toFixed(2))}; }
-    if (gameId==='case-battles') { const ids=Array.isArray(req.body?.caseIds)?req.body.caseIds.map(String):[String(req.body?.caseId||'')]; round.state={caseIds:ids,mode:'house',houseSeed:crypto.randomBytes(16).toString('hex')}; }
-    if (gameId==='cases') { const c=caseCatalog.get(String(req.body?.caseId||'')); const count=Math.max(1,Math.min(4,Number(req.body?.count)||1)); if(!c)return res.status(400).json({ok:false,error:'case_not_found'}); const total=c.price*count; if(Math.abs(total-betDls)>0.01)return res.status(400).json({ok:false,error:'case_price_mismatch'}); round.state={caseId:c.id,count}; }
+    if (gameId==='cases') { const c=caseMap.get(String(req.body?.caseId||'')); const count=Math.max(1,Math.min(4,Number(req.body?.count)||1)); if(!c)return res.status(400).json({ok:false,error:'case_not_found'}); const total=c.price*count; if(Math.abs(total-betDls)>0.01)return res.status(400).json({ok:false,error:'case_price_mismatch'}); round.state={caseId:c.id,count,caseSnapshot:c}; }
     if (gameId==='mines') {
       const size=Math.max(5,Math.min(8,Number(req.body?.gridSize)||5)); const total=size*size; const mineCount=Math.max(1,Math.min(total-1,Number(req.body?.mines)||3));
       const rr=rng(serverSeed+':mines'); const mineSet=new Set(); while(mineSet.size<mineCount) mineSet.add(Math.floor(rr()*total));
@@ -488,6 +488,23 @@ export function resolveGame(gameId, random, action, betDls, state) {
     const multiplier=probability>0?Number((0.98/probability).toFixed(2)):0;
     return {outcome:win?'win':'loss',roll,target,condition,multiplier,payout:win?betDls*multiplier:0};
   }
+  if(gameId==='cases'){
+    const c=state?.caseSnapshot;
+    const count=Math.max(1,Math.min(4,Number(state?.count)||1));
+    if(!c||!Array.isArray(c.items)||!c.items.length)return {outcome:'invalid',payout:0,error:'case_not_found'};
+    const winners=[];
+    let payout=0;
+    for(let n=0;n<count;n++){
+      let x=random()*100, chosen=c.items[c.items.length-1];
+      for(const item of c.items){
+        x-=Math.max(0,Number(item.chance)||0);
+        if(x<=0){chosen=item;break;}
+      }
+      winners.push(chosen);
+      payout+=Math.max(0,Number(chosen.price)||0);
+    }
+    return {outcome:payout>0?'win':'loss',winners,totalPayout:Number(payout.toFixed(2)),payout:Number(payout.toFixed(2)),count};
+  }
   if(gameId==='keno'){
     const picks=Array.isArray(action.picks)?[...new Set(action.picks.map(Number))].filter(n=>Number.isInteger(n)&&n>=1&&n<=40):[];
     const risk=KENO_PAYTABLES[action.risk]?action.risk:'Medium';
@@ -542,7 +559,7 @@ function resolvePvPCaseBattle(battle){
   for(const p of battle.players){
     let total=0;const items=[];
     for(const caseId of battle.caseIds){
-      const c=caseCatalog.get(caseId);if(!c)throw new Error('case_not_found');
+      const c=(battle.caseSnapshots||[]).find(x=>String(x.id)===String(caseId));if(!c)throw new Error('case_not_found');
       const rr=rng(battle.serverSeed+':pvp:'+p.userId+':'+caseId+':'+items.length);
       let x=rr()*100,chosen=c.items[c.items.length-1];
       for(const item of c.items){x-=Math.max(0,Number(item.chance)||0);if(x<=0){chosen=item;break;}}
@@ -559,7 +576,7 @@ function resolvePvPCaseBattle(battle){
 function resolveCaseBattle(round,r,action){
   const ids=Array.isArray(round.state?.caseIds)?round.state.caseIds:[];if(!ids.length)return {outcome:'invalid',payout:0,error:'case_not_found'};
   let userTotal=0,houseTotal=0;const userItems=[],houseItems=[];
-  for(const id of ids){const c=caseCatalog.get(String(id));if(!c)return {outcome:'invalid',payout:0,error:'case_not_found'};const pick=()=>{let x=r()*100,w=c.items[c.items.length-1];for(const it of c.items){x-=Math.max(0,Number(it.chance)||0);if(x<=0){w=it;break;}}return w;};const u=pick(),h=pick();userItems.push(u);houseItems.push(h);userTotal+=Number(u.price||0);houseTotal+=Number(h.price||0);}
+  for(const id of ids){const c=(round.state?.caseSnapshots||[]).find(x=>String(x.id)===String(id));if(!c)return {outcome:'invalid',payout:0,error:'case_not_found'};const pick=()=>{let x=r()*100,w=c.items[c.items.length-1];for(const it of c.items){x-=Math.max(0,Number(it.chance)||0);if(x<=0){w=it;break;}}return w;};const u=pick(),h=pick();userItems.push(u);houseItems.push(h);userTotal+=Number(u.price||0);houseTotal+=Number(h.price||0);}
   const win=userTotal>=houseTotal;return {outcome:win?'win':'loss',userItems,houseItems,userTotal,houseTotal,payout:win?round.betDls*2:0,multiplier:win?2:0};
 }
 

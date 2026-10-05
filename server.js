@@ -82,7 +82,7 @@ installEconomyRoutes(app, {
   broadcast,
 });
 
-installGameRoutes(app, { sessionUser, debitForGame, creditGameResult }, { broadcast });
+const installGamesPromise = installGameRoutes(app, { sessionUser, debitForGame, creditGameResult }, { broadcast });
 
 // Real-Time WebSocket Server
 const wss = new WebSocketServer({ server, path: '/ws' });
@@ -96,31 +96,46 @@ function broadcast(data, excludeWs = null) {
   }
 }
 
-wss.on('connection', (ws) => {
-  // Send initial real state upon connecting
-  ws.send(
-    JSON.stringify({
-      type: 'INIT_STATE',
-      payload: {
-        chatHistory: liveChatHistory.slice(-50),
-        liveBets: liveBetsHistory.slice(0, 30),
-        activeBattles: activeBattles.filter((b) => b.status === 'open'),
-      },
-    })
-  );
+wss.on('connection', async (ws, req) => {
+  const user = await sessionUser(req).catch(() => null);
+  if (!user) {
+    ws.close(1008, 'authentication_required');
+    return;
+  }
+
+  ws.send(JSON.stringify({
+    type: 'INIT_STATE',
+    payload: {
+      chatHistory: liveChatHistory.slice(-50),
+      liveBets: liveBetsHistory.slice(0, 30),
+      activeBattles: activeBattles.filter((b) => b.status === 'open'),
+    },
+  }));
 
   ws.on('message', (raw) => {
     try {
       const message = JSON.parse(raw.toString());
+      if (message.type !== 'CHAT_MESSAGE') {
+        if (message.type === 'LIVE_BET' || message.type === 'BATTLE_CREATE' || message.type === 'BATTLE_UPDATE') {
+          ws.send(JSON.stringify({ type:'ERROR', payload:{ error:'server_authoritative_event' } }));
+        }
+        return;
+      }
 
-      if (message.type === 'CHAT_MESSAGE') {
-        const chatItem = message.payload;
-        liveChatHistory.push(chatItem);
-        if (liveChatHistory.length > MAX_HISTORY) liveChatHistory.shift();
-        broadcast({ type: 'CHAT_MESSAGE', payload: chatItem });
-      } else if (message.type === 'LIVE_BET' || message.type === 'BATTLE_CREATE' || message.type === 'BATTLE_UPDATE') {
-        // Server-authoritative realtime feeds cannot be injected by clients.
-        ws.send(JSON.stringify({ type:'ERROR', payload:{ error:'server_authoritative_event' } }));
+      const incoming = message.payload && typeof message.payload === 'object' ? message.payload : {};
+      const text = String(incoming.message || incoming.text || '').trim().slice(0, 500);
+      if (!text) return;
+
+      const chatItem = {
+        id: crypto.randomUUID(),
+        userId: user.id,
+        username: user.username,
+        message: text,
+        createdAt: new Date().toISOString(),
+      };
+      liveChatHistory.push(chatItem);
+      if (liveChatHistory.length > MAX_HISTORY) liveChatHistory.shift();
+      broadcast({ type: 'CHAT_MESSAGE', payload: chatItem });
     } catch (err) {
       console.error('WS parse error:', err);
     }
@@ -139,6 +154,7 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 (async () => {
   try {
     await ensureMongoSchema();
+    await installGamesPromise;
     server.listen(PORT, () => {
       console.log(`[Supreme Casino] Server running on port ${PORT}`);
       console.log(`[Supreme Casino] Healthcheck: http://localhost:${PORT}/healthz`);
