@@ -14,7 +14,8 @@ const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 
 // Enable JSON body parsing
-app.use(express.json());
+app.use(express.json({ limit: '64kb' }));
+app.disable('x-powered-by');
 
 // Health check endpoint for Render.com
 app.get('/healthz', (req, res) => {
@@ -63,90 +64,6 @@ installEconomyRoutes(app, {
 
 installGameRoutes(app, { sessionUser, debitForGame, creditGameResult }, { broadcast });
 
-// In-memory registered link codes from website accounts (code -> { username, code, growId, timestamp })
-const registeredLinkCodes = new Map();
-const linkedGrowIds = new Map(); // code -> growId
-
-app.post('/api/gtps/register-code', (req, res) => {
-  const { username, code, growId } = req.body;
-  if (!code) return res.status(400).json({ error: 'Code required' });
-  const cleanCode = String(code).trim();
-  registeredLinkCodes.set(cleanCode, {
-    username: username || 'User',
-    code: cleanCode,
-    growId: growId || null,
-    timestamp: Date.now(),
-  });
-
-  res.json({ success: true, code: cleanCode, registered: true });
-});
-
-// Lua menanyakan status kode saat player /link <kode>.
-// registered:true + username dipakai Lua untuk menamai akun casino di sisi game.
-app.get('/api/gtps/check-link', (req, res) => {
-  const code = String(req.query.code || '').trim();
-  if (!code) return res.json({ linked: false });
-
-  // 1. Sudah pernah link (webhook dari Lua pernah masuk)
-  if (linkedGrowIds.has(code)) {
-    const growId = linkedGrowIds.get(code);
-    return res.json({ linked: true, growId, code });
-  }
-
-  // 2. Kode terdaftar dari akun web -> kirim username-nya ke Lua
-  const reg = registeredLinkCodes.get(code);
-  if (reg) {
-    return res.json({ linked: false, registered: true, username: reg.username, code });
-  }
-
-  res.json({ linked: false, code });
-});
-
-app.post('/api/gtps/link-growid', (req, res) => {
-  const { growid, code } = req.body;
-  const cleanCode = String(code || '').trim();
-  const cleanGrowId = String(growid || '').trim();
-  console.log(`[GTPS Link] GrowID ${cleanGrowId} linked with code ${cleanCode}`);
-
-  if (cleanCode && cleanGrowId) {
-    linkedGrowIds.set(cleanCode, cleanGrowId);
-  }
-
-  broadcast({
-    type: 'GTPS_LINK',
-    payload: { growId: cleanGrowId, code: cleanCode, timestamp: Date.now() },
-  });
-
-  res.json({ success: true, growId: cleanGrowId, code: cleanCode });
-});
-
-app.get('/api/gtps/balance/:growid', (req, res) => {
-  res.json({ success: true, growId: req.params.growid, status: 'active' });
-});
-
-// Player /unlink di game -> lepas link di sisi web juga
-app.post('/api/gtps/unlink', (req, res) => {
-  const { growid, secretKey } = req.body;
-  if (secretKey !== gtpsConfig.secretKey) {
-    return res.status(403).json({ error: 'Invalid secret key' });
-  }
-  const cleanGrowId = String(growid || '').trim();
-  if (!cleanGrowId) return res.status(400).json({ error: 'growid required' });
-
-  for (const [code, gid] of Array.from(linkedGrowIds.entries())) {
-    if (String(gid).toLowerCase() === cleanGrowId.toLowerCase()) {
-      linkedGrowIds.delete(code);
-    }
-  }
-
-  broadcast({ type: 'GTPS_UNLINK', payload: { growId: cleanGrowId, timestamp: Date.now() } });
-  console.log(`[GTPS Unlink] ${cleanGrowId} unlinked from in-game`);
-  res.json({ success: true, growId: cleanGrowId });
-});
-
-// Tombol Unlink di wallet web -> lepas link web + bridge ke Lua
-// Validasi: kode link harus terdaftar (kode di-re-register tiap wallet dibuka),
-// jadi unlink tetap jalan meski cache link di memori hilang setelah restart.
 // Real-Time WebSocket Server
 const wss = new WebSocketServer({ server, path: '/ws' });
 
@@ -181,25 +98,9 @@ wss.on('connection', (ws) => {
         liveChatHistory.push(chatItem);
         if (liveChatHistory.length > MAX_HISTORY) liveChatHistory.shift();
         broadcast({ type: 'CHAT_MESSAGE', payload: chatItem });
-      } else if (message.type === 'LIVE_BET') {
-        const betItem = message.payload;
-        liveBetsHistory.unshift(betItem);
-        if (liveBetsHistory.length > MAX_HISTORY) liveBetsHistory.pop();
-        broadcast({ type: 'LIVE_BET', payload: betItem });
-      } else if (message.type === 'BATTLE_CREATE') {
-        const battle = message.payload;
-        activeBattles.unshift(battle);
-        broadcast({ type: 'BATTLE_CREATED', payload: battle });
-      } else if (message.type === 'BATTLE_UPDATE') {
-        const updated = message.payload;
-        const idx = activeBattles.findIndex((b) => b.id === updated.id);
-        if (idx !== -1) {
-          activeBattles[idx] = updated;
-        } else {
-          activeBattles.unshift(updated);
-        }
-        broadcast({ type: 'BATTLE_UPDATED', payload: updated });
-      }
+      } else if (message.type === 'LIVE_BET' || message.type === 'BATTLE_CREATE' || message.type === 'BATTLE_UPDATE') {
+        // Server-authoritative realtime feeds cannot be injected by clients.
+        ws.send(JSON.stringify({ type:'ERROR', payload:{ error:'server_authoritative_event' } }));
     } catch (err) {
       console.error('WS parse error:', err);
     }
@@ -210,6 +111,10 @@ wss.on('connection', (ws) => {
 app.use((req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
+
+const shutdown = (signal) => { console.log(`[Supreme Casino] ${signal} received; shutting down`); server.close(() => process.exit(0)); setTimeout(() => process.exit(1), 10000).unref(); };
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 server.listen(PORT, () => {
   console.log(`[Supreme Casino] Server running on port ${PORT}`);
