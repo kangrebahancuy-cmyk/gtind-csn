@@ -1,6 +1,6 @@
 import crypto from 'crypto';
-import { loadEconomyState, saveEconomyState } from './economy-store.js';
-const sessions = new Map();
+import { loadEconomyState, saveEconomyState, createPersistentSession, getPersistentSession, deletePersistentSession, prunePersistentSessions } from './economy-store.js';
+prunePersistentSessions();
 const rateBuckets = new Map();
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_BODY_AMOUNT = 100000000;
@@ -80,15 +80,15 @@ export function sessionUser(req) {
   const token = String(req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('gtind_session='));
   const value = token ? decodeURIComponent(token.slice('gtind_session='.length)) : '';
   if (!value) return null;
-  const session = sessions.get(value);
-  if (!session || session.expiresAt < Date.now()) { sessions.delete(value); return null; }
+  const session = getPersistentSession(value);
+  if (!session) return null;
   const userId = session.userId;
   const db = load();
   return db.users.find(u => u.id === userId) || null;
 }
-function createSession(db,user) { const token=crypto.randomBytes(32).toString('hex'); sessions.set(token,{userId:user.id,expiresAt:Date.now()+SESSION_TTL_MS}); return token; }
+function createSession(_db,user) { return createPersistentSession(user.id,SESSION_TTL_MS).token; }
 function sessionCookie(req, token, maxAge=SESSION_TTL_MS/1000) { const secure=String(req.headers['x-forwarded-proto']||'').includes('https') ? '; Secure' : ''; return `gtind_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(maxAge)}${secure}`; }
-function destroySession(req) { const raw=String(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('gtind_session=')); if(raw) sessions.delete(decodeURIComponent(raw.slice('gtind_session='.length))); }
+function destroySession(req) { const raw=String(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('gtind_session=')); if(raw) deletePersistentSession(decodeURIComponent(raw.slice('gtind_session='.length))); }
 function requireAuth(req, res) {
   const user = sessionUser(req);
   if (!user) { res.status(401).json({ ok: false, error: 'not_authenticated' }); return null; }
@@ -185,7 +185,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     if (!user || !verifyPassword(password, user.passwordHash)) return res.status(401).json({ ok:false, error:'invalid_credentials' });
     if (user.isBanned) return res.status(403).json({ ok:false, error:'account_banned' });
     const token = createSession(db,user);
-    res.setHeader('Set-Cookie', `gtind_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`);
+    res.setHeader('Set-Cookie', sessionCookie(req, token));
     res.json({ ok:true, user:publicUser(user) });
   });
 
