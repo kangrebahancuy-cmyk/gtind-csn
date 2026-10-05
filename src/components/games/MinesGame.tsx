@@ -18,6 +18,8 @@ export const MinesGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     setAuthModalOpen,
     setActiveGameSession,
     checkCanPlayGame,
+    startGameRound,
+    resolveGameRound,
   } = useGame();
 
   const [betMode, setBetMode] = useState<'manual' | 'auto'>('manual');
@@ -30,6 +32,7 @@ export const MinesGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [explodedTile, setExplodedTile] = useState<number | null>(null);
   const [result, setResult] = useState<'win' | 'loss' | null>(null);
   const [roundBet, setRoundBet] = useState(0);
+  const [roundId, setRoundId] = useState<string | null>(null);
   const [cashedOutInfo, setCashedOutInfo] = useState<{ multiplier: number; payout: number } | null>(null);
 
   const safeRef = useRef<number[]>([]);
@@ -87,103 +90,30 @@ export const MinesGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
   const tiles = useMemo(() => Array.from({ length: totalTiles }, (_, i) => i), [totalTiles]);
 
-  const start = () => {
-    if (!user.isAuthenticated) {
-      setAuthModalOpen(true);
-      return;
-    }
-
-    // Check if another game is already active
-    if (!checkCanPlayGame('mines', 'Mines')) {
-      return;
-    }
-
-    const b = fromActiveAmount(Number(bet));
-    if (!b || b <= 0 || !deductBet(b)) return;
-
-    // Pick unique mine positions
-    const newMineMap: number[] = [];
-    while (newMineMap.length < mines) {
-      const pos = Math.floor(Math.random() * totalTiles);
-      if (!newMineMap.includes(pos)) newMineMap.push(pos);
-    }
-
-    setMineMap(newMineMap);
-    setSafe([]);
-    setExplodedTile(null);
-    setResult(null);
-    setCashedOutInfo(null);
-    setRoundBet(b);
-    setPlaying(true);
-    safeRef.current = [];
-    mineMapRef.current = newMineMap;
-    playingRef.current = true;
-
-    setActiveGameSession({ gameId: 'mines', gameTitle: 'Mines' });
-
-    // Persist active game to localStorage
-    localStorage.setItem(
-      'voidps_mines_state',
-      JSON.stringify({
-        playing: true,
-        gridSize,
-        mines,
-        safe: [],
-        mineMap: newMineMap,
-        roundBet: b,
-      })
-    );
+  const start = async () => {
+    if (!user.isAuthenticated) { setAuthModalOpen(true); return; }
+    if (!checkCanPlayGame('mines', 'Mines')) return;
+    const b = fromActiveAmount(Number(bet)); if (!b || b <= 0) return;
+    const started = await startGameRound('mines', b);
+    if (!started.success || !started.roundId) return;
+    setRoundId(started.roundId); setMineMap([]); setSafe([]); setExplodedTile(null); setResult(null); setCashedOutInfo(null); setRoundBet(b); setPlaying(true);
+    safeRef.current=[]; mineMapRef.current=[]; playingRef.current=true;
+    setActiveGameSession({gameId:'mines',gameTitle:'Mines'});
   };
 
   // Instant responsive multi-selection (rapid clicking)
-  const pick = (index: number) => {
-    if (!playingRef.current || safeRef.current.includes(index)) return;
-
-    // Check if clicked tile is a bomb
-    if (mineMapRef.current.includes(index)) {
-      playingRef.current = false;
-      setExplodedTile(index);
-      setPlaying(false);
-      setResult('loss');
-      recordLoss(roundBet, 'Mines');
-      sound.playExplosion();
-      setActiveGameSession(null);
-      localStorage.removeItem('voidps_mines_state');
-      return;
+  const pick = async (index: number) => {
+    if (!playingRef.current || safeRef.current.includes(index) || !roundId) return;
+    const resolved = await resolveGameRound(roundId,{selected:index,gridSize,mines,revealed:safeRef.current});
+    if(!resolved.success || !resolved.result) return;
+    const rr=resolved.result;
+    if(rr.outcome==='loss'){
+      playingRef.current=false; setMineMap(Array.isArray(rr.mineMap)?rr.mineMap:[]); setExplodedTile(index); setPlaying(false); setResult('loss'); sound.playExplosion(); setActiveGameSession(null); setRoundId(null); return;
     }
-
-    // Safe Gem revealed immediately with signature crystal chime
     sound.playGem();
-    safeRef.current.push(index);
-    const newSafe = [...safeRef.current];
-    setSafe(newSafe);
-
-    // Persist step to localStorage
-    localStorage.setItem(
-      'voidps_mines_state',
-      JSON.stringify({
-        playing: true,
-        gridSize,
-        mines,
-        safe: newSafe,
-        mineMap: mineMapRef.current,
-        roundBet,
-      })
-    );
-
-    // Check if all gems uncovered (Full Board Clear!)
-    if (newSafe.length === totalTiles - mines) {
-      playingRef.current = false;
-      const finalMult = calculateMultiplier(newSafe.length);
-      const payout = roundBet * finalMult;
-      awardPayout(payout, 'Mines', finalMult, roundBet);
-      setCashedOutInfo({ multiplier: finalMult, payout });
-      setPlaying(false);
-      setResult('win');
-      sound.playCashout();
-      sound.playWin();
-      setActiveGameSession(null);
-      localStorage.removeItem('voidps_mines_state');
+    const next=[...safeRef.current,index]; safeRef.current=next; setSafe(next);
+    if(rr.outcome==='win'){
+      playingRef.current=false; setPlaying(false); setResult('win'); setCashedOutInfo({multiplier:Number(rr.multiplier),payout:Number(resolved.payoutDls||0)}); setActiveGameSession(null); setRoundId(null); sound.playCashout(); sound.playWin();
     }
   };
 
@@ -195,20 +125,11 @@ export const MinesGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     pick(randomPick);
   };
 
-  const cashout = () => {
-    if (!playingRef.current || !safeRef.current.length) return;
-    playingRef.current = false;
-    sound.playCashout();
-    sound.playWin();
-
-    const payout = roundBet * currentMultiplier;
-    awardPayout(payout, 'Mines', currentMultiplier, roundBet);
-    setCashedOutInfo({ multiplier: currentMultiplier, payout });
-
-    setPlaying(false);
-    setResult('win');
-    setActiveGameSession(null);
-    localStorage.removeItem('voidps_mines_state');
+  const cashout = async () => {
+    if (!playingRef.current || !safeRef.current.length || !roundId) return;
+    const resolved = await resolveGameRound(roundId,{cashout:true,final:true,selected:safeRef.current[safeRef.current.length-1],revealed:safeRef.current,gridSize,mines});
+    if(!resolved.success) return;
+    playingRef.current=false; setPlaying(false); setResult('win'); setCashedOutInfo({multiplier:Number(resolved.result?.multiplier||1),payout:Number(resolved.payoutDls||0)}); setActiveGameSession(null); setRoundId(null); sound.playCashout(); sound.playWin();
   };
 
   return (
