@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { installEconomyRoutes, sessionUser, debitForGame, creditGameResult } from './server/economy.js';
+import { loadEconomyState } from './server/economy-store.js';
 import { installGameRoutes } from './server/games.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -40,7 +41,6 @@ app.get('/healthz', (req, res) => {
 app.get('/readyz', (req,res) => {
   try {
     // Loading the economy store verifies that the configured persistent DB is readable.
-    const { loadEconomyState } = await import('./server/economy-store.js');
     loadEconomyState();
     res.json({status:'ready',timestamp:new Date().toISOString()});
   } catch (error) {
