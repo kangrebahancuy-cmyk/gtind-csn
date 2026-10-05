@@ -10,6 +10,7 @@ import { ensureMongoSchema, pingMongo, closeMongo } from './server/mongo-store.j
 import { installGameRoutes } from './server/games.js';
 import { installProgressionRoutes } from './server/progression.js';
 import { installChatRoutes, startChatRetentionWorker, saveChatMessage } from './server/social.js';
+import { installAdminRoutes } from './server/admin.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -80,6 +81,7 @@ app.get('/api/gtps/status', (req, res) => {
 });
 
 installProgressionRoutes(app, { sessionUser });
+installAdminRoutes(app, { sessionUser });
 
 installChatRoutes(app, { sessionUser, broadcast });
 
