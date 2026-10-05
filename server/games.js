@@ -5,7 +5,7 @@ import path from 'path';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const FILE = path.join(DATA_DIR, 'game-rounds.json');
 const rounds = new Map();
-const SERVER_AUTH_GAMES = new Set(['coinflip','mines','towers','roulette','keno','dice']);
+const SERVER_AUTH_GAMES = new Set(['coinflip','mines','towers','roulette','keno','dice','blackjack','cases','case-battles','crash']);
 
 function ensure() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -66,6 +66,7 @@ export function installGameRoutes(app, economy) {
     const commitment=hash(serverSeed);
     const round={id:id(),userId:user.id,username:user.username,gameId,betDls,status:'ACTIVE',
       serverSeed,serverSeedHash:commitment,clientSeed,nonce,createdAt:new Date().toISOString(),balanceAfterBet:result.balance};
+    if (gameId==='blackjack') { const initial=startBlackjack(round); round.initialResult=initial; }
     if (gameId==='mines') {
       const size=Math.max(2,Math.min(8,Number(req.body?.gridSize)||5)); const total=size*size; const mineCount=Math.max(1,Math.min(total-1,Number(req.body?.mines)||3));
       const rr=rng(serverSeed+':mines'); const mineSet=new Set(); while(mineSet.size<mineCount) mineSet.add(Math.floor(rr()*total));
@@ -86,10 +87,10 @@ export function installGameRoutes(app, economy) {
     const action=req.body?.action && typeof req.body.action==='object' ? req.body.action : {};
     const step=Number.isInteger(action.step)?Math.max(0,action.step):0;
     const random=rng(round.serverSeed + ':' + round.clientSeed + ':' + round.nonce + ':' + step);
-    const result=(round.gameId==='coinflip' && action.cashout===true) ? resolveCashout(round, action) : resolveGame(round.gameId,random,action,round.betDls,round.state);
+    const result=round.gameId==='blackjack' ? resolveBlackjack(round,action) : ((round.gameId==='coinflip' && action.cashout===true) ? resolveCashout(round, action) : resolveGame(round.gameId,random,action,round.betDls,round.state));
     const payout=Number((result.payout||0).toFixed(2));
     if (payout < 0 || payout > round.betDls * 100000) return res.status(400).json({ok:false,error:'invalid_payout'});
-    const shouldCredit=action.cashout===true || action.final===true || !['coinflip'].includes(round.gameId);
+    const shouldCredit=(round.gameId==='blackjack' ? result.outcome!=='continue' : (action.cashout===true || action.final===true || !['coinflip'].includes(round.gameId)));
     let credit={ok:true,balance:round.balanceAfterBet};
     if(shouldCredit){
       credit=economy.creditGameResult(user.id,payout,round);
@@ -102,6 +103,32 @@ export function installGameRoutes(app, economy) {
   });
 }
 
+function makeBlackjackDeck(seed) {
+  const suits=['♠','♥','♦','♣'], ranks=[['A',11],['2',2],['3',3],['4',4],['5',5],['6',6],['7',7],['8',8],['9',9],['10',10],['J',10],['Q',10],['K',10]];
+  const deck=[]; for(const suit of suits)for(const [rank,value] of ranks)deck.push({suit,rank,value});
+  const rr=rng(seed); for(let i=deck.length-1;i>0;i--){const j=Math.floor(rr()*(i+1));[deck[i],deck[j]]=[deck[j],deck[i]];} return deck;
+}
+function blackjackScore(cards){let total=cards.reduce((n,c)=>n+c.value,0), aces=cards.filter(c=>c.rank==='A').length;while(total>21&&aces-- >0)total-=10;return total;}
+function startBlackjack(round){
+  const deck=makeBlackjackDeck(round.serverSeed+':blackjack'); const player=[deck.pop(),deck.pop()],dealer=[deck.pop(),deck.pop()];
+  round.state={deck,player,dealer,bet:round.betDls,phase:'player'}; return {player,dealer:[dealer[0]],phase:'player',playerScore:blackjackScore(player),dealerScore:blackjackScore([dealer[0]])};
+}
+function resolveBlackjack(round,action){
+  const st=round.state;if(!st||!Array.isArray(st.player)||!Array.isArray(st.dealer)||!Array.isArray(st.deck))return {error:'round_state_missing',payout:0};
+  if(action.type==='hit'){
+    if(st.phase!=='player'||!st.deck.length)return {error:'invalid_action',payout:0}; st.player.push(st.deck.pop()); const score=blackjackScore(st.player);
+    if(score>21){st.phase='finished';return {outcome:'loss',player:st.player,dealer:st.dealer,payout:0,score,dealerScore:blackjackScore(st.dealer)};}
+    return {outcome:'continue',player:st.player,dealer:[st.dealer[0]],payout:0,score,dealerScore:blackjackScore([st.dealer[0]])};
+  }
+  if(action.type==='double'){
+    if(st.phase!=='player'||st.player.length!==2||!Number.isFinite(st.bet*2))return {error:'invalid_action',payout:0};
+    const extra=round.betDls;if(!economySafeDebit){} st.bet*=2; st.player.push(st.deck.pop()); const score=blackjackScore(st.player); st.phase='dealer'; if(score>21){st.phase='finished';return {outcome:'loss',player:st.player,dealer:st.dealer,payout:0,score};}
+  } else if(action.type==='stand'){if(st.phase!=='player')return {error:'invalid_action',payout:0};st.phase='dealer';} else return {error:'invalid_action',payout:0};
+  while(blackjackScore(st.dealer)<17&&st.deck.length)st.dealer.push(st.deck.pop());
+  st.phase='finished'; const ps=blackjackScore(st.player),ds=blackjackScore(st.dealer); let payout=0,outcome='loss';
+  if(ds>21||ps>ds){payout=st.bet*2;outcome='win';} else if(ps===ds){payout=st.bet;outcome='push';}
+  return {outcome,player:st.player,dealer:st.dealer,payout,score:ps,dealerScore:ds};
+}
 function resolveCashout(round, action) {
   if(round.gameId==='mines'){
     const size=Number(round.state?.size)||5,total=size*size,mineCount=Number(round.state?.mineCount)||3,revealed=Array.isArray(round.state?.revealed)?round.state.revealed.length:0;
