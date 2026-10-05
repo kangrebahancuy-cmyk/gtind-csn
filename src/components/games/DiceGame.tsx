@@ -13,6 +13,8 @@ export const DiceGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     currencyLabel,
     user,
     setAuthModalOpen,
+    startGameRound,
+    resolveGameRound,
   } = useGame();
 
   const [bet, setBet] = useState('10');
@@ -37,50 +39,19 @@ export const DiceGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     setMode((m) => (m === 'under' ? 'over' : 'under'));
   };
 
-  const rollDice = () => {
-    if (!user.isAuthenticated) {
-      setAuthModalOpen(true);
-      return;
-    }
-
+  const rollDice = async () => {
+    if (!user.isAuthenticated) { setAuthModalOpen(true); return; }
     if (rolling) return;
-
-    const b = fromActiveAmount(Number(bet));
-    if (!b || b <= 0 || !deductBet(b)) return;
-
-    sound.playClick();
-    setRolling(true);
-    setHasWon(null);
-
-    // Fast roll ticker animation
-    let elapsed = 0;
-    const interval = setInterval(() => {
-      setRolledNumber(Number((Math.random() * 100).toFixed(2)));
-      sound.playTick();
-      elapsed += 40;
-
-      if (elapsed >= 400) {
-        clearInterval(interval);
-        // Final Roll Result (0.00 to 100.00)
-        const finalRoll = Number((Math.random() * 100).toFixed(2));
-        setRolledNumber(finalRoll);
-
-        const isWin = mode === 'under' ? finalRoll < targetNumber : finalRoll > targetNumber;
-        setHasWon(isWin);
-        setRolling(false);
-        setHistory((prev) => [{ roll: finalRoll, won: isWin }, ...prev.slice(0, 9)]);
-
-        if (isWin) {
-          const payout = b * multiplier;
-          awardPayout(payout, 'Dice', multiplier, b);
-          sound.playCashout();
-          sound.playWin();
-        } else {
-          recordLoss(b, 'Dice');
-          sound.playExplosion();
-        }
-      }
-    }, 40);
+    const b = fromActiveAmount(Number(bet)); if (!b || b <= 0) return;
+    const started = await startGameRound('dice', b);
+    if (!started.success || !started.roundId) return;
+    sound.playClick(); setRolling(true); setHasWon(null);
+    const resolved = await resolveGameRound(started.roundId, { target:targetNumber, condition:mode });
+    if (!resolved.success || !resolved.result) { setRolling(false); return; }
+    const finalRoll=Number(resolved.result.roll); const isWin=resolved.result.outcome==='win';
+    setRolledNumber(finalRoll); setHasWon(isWin); setRolling(false);
+    setHistory(prev=>[{roll:finalRoll,won:isWin},...prev.slice(0,9)]);
+    if(isWin){sound.playCashout();sound.playWin();}else sound.playExplosion();
   };
 
   return (
