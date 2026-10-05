@@ -5,12 +5,18 @@ import path from 'path';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const FILE = path.join(DATA_DIR, 'game-rounds.json');
 const rounds = new Map();
+const caseCatalog = new Map();
+const CASE_FILE = path.join(DATA_DIR, 'cases.json');
 const SERVER_AUTH_GAMES = new Set(['coinflip','mines','towers','roulette','keno','dice','blackjack','cases','case-battles','crash']);
 
 function ensure() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(FILE)) fs.writeFileSync(FILE, JSON.stringify([], null, 2));
+  if (!fs.existsSync(CASE_FILE)) fs.writeFileSync(CASE_FILE, JSON.stringify([], null, 2));
 }
+function persistCases(){ensure();fs.writeFileSync(CASE_FILE+'.tmp',JSON.stringify([...caseCatalog.values()],null,2));fs.renameSync(CASE_FILE+'.tmp',CASE_FILE);}
+function loadCases(){ensure();try{const rows=JSON.parse(fs.readFileSync(CASE_FILE,'utf8'));if(Array.isArray(rows))rows.forEach(c=>caseCatalog.set(String(c.id),c));}catch{}}
+loadCases();
 function persist() {
   ensure();
   fs.writeFileSync(FILE + '.tmp', JSON.stringify([...rounds.values()].slice(-5000), null, 2));
@@ -47,6 +53,20 @@ export function installGameRoutes(app, economy) {
     next();
   });
 
+  app.get('/api/games/cases/catalog',(req,res)=>res.json({ok:true,cases:[...caseCatalog.values()]}));
+  app.post('/api/games/cases/catalog',(req,res)=>{
+    const user=requireUser(req,res);if(!user)return;
+    if(!user.isAdmin)return res.status(403).json({ok:false,error:'admin_required'});
+    const c=req.body?.case;
+    if(!c||!c.id||!c.name||!Array.isArray(c.items)||!c.items.length)return res.status(400).json({ok:false,error:'invalid_case'});
+    const items=c.items.map(x=>({id:String(x.id),name:String(x.name),image:String(x.image||''),price:Number(x.price)||0,chance:Number(x.chance)||0,rarity:String(x.rarity||'common'),color:String(x.color||'')}));
+    const total=items.reduce((n,x)=>n+Math.max(0,x.chance),0);if(total<=0)return res.status(400).json({ok:false,error:'invalid_chances'});
+    const normalized=items.map(x=>({...x,chance:Number((x.chance/total*100).toFixed(6))}));
+    const price=Number(c.price)||Number(normalized.reduce((n,x)=>n+x.price*x.chance/100,0).toFixed(6));
+    const safe={id:String(c.id),name:String(c.name),image:String(c.image||''),color:String(c.color||''),price,volatility:String(c.volatility||'Medium'),creator:String(c.creator||user.username),openedTimes:Number(c.openedTimes)||0,items:normalized};
+    caseCatalog.set(safe.id,safe);persistCases();res.json({ok:true,case:safe});
+  });
+  app.delete('/api/games/cases/catalog/:id',(req,res)=>{const user=requireUser(req,res);if(!user)return;if(!user.isAdmin)return res.status(403).json({ok:false,error:'admin_required'});caseCatalog.delete(String(req.params.id));persistCases();res.json({ok:true});});
   app.get('/api/games/fairness', (req,res) => {
     const user=requireUser(req,res); if(!user)return;
     res.json({ok:true,algorithm:'HMAC-SHA256',description:'Server seed is generated server-side and only its SHA-256 commitment is exposed before the result.'});
