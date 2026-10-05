@@ -35,7 +35,7 @@ load();
 
 function id() { return 'rnd_' + Date.now() + '_' + crypto.randomBytes(6).toString('hex'); }
 function hash(s) { return crypto.createHash('sha256').update(s).digest('hex'); }
-function rng(seed) {
+export function rng(seed) {
   let counter = 0;
   return () => {
     const h = crypto.createHmac('sha256', seed).update(String(counter++)).digest();
@@ -133,12 +133,12 @@ export function installGameRoutes(app, economy) {
   });
 }
 
-function makeBlackjackDeck(seed) {
+export function makeBlackjackDeck(seed) {
   const suits=['♠','♥','♦','♣'], ranks=[['A',11],['2',2],['3',3],['4',4],['5',5],['6',6],['7',7],['8',8],['9',9],['10',10],['J',10],['Q',10],['K',10]];
   const deck=[]; for(const suit of suits)for(const [rank,value] of ranks)deck.push({suit,rank,value});
   const rr=rng(seed); for(let i=deck.length-1;i>0;i--){const j=Math.floor(rr()*(i+1));[deck[i],deck[j]]=[deck[j],deck[i]];} return deck;
 }
-function blackjackScore(cards){let total=cards.reduce((n,c)=>n+c.value,0), aces=cards.filter(c=>c.rank==='A').length;while(total>21&&aces-- >0)total-=10;return total;}
+export function blackjackScore(cards){let total=cards.reduce((n,c)=>n+c.value,0), aces=cards.filter(c=>c.rank==='A').length;while(total>21&&aces-- >0)total-=10;return total;}
 function startBlackjack(round){
   const deck=makeBlackjackDeck(round.serverSeed+':blackjack'); const player=[deck.pop(),deck.pop()],dealer=[deck.pop(),deck.pop()];
   round.state={deck,player,dealer,bet:round.betDls,phase:'player'}; return {player,dealer:[dealer[0]],phase:'player',playerScore:blackjackScore(player),dealerScore:blackjackScore([dealer[0]])};
@@ -175,7 +175,7 @@ function resolveCashout(round, action) {
   return {outcome:'cashout',step,multiplier,payout:round.betDls*multiplier,cashedOut:true};
 }
 
-function resolveCrash(round,action){
+export function resolveCrash(round,action){
   if(action.type==='cancel')return {outcome:'cancelled',current:1,multiplier:1,payout:round.betDls};
   const elapsed=Math.max(0,(Date.now()-Number(round.state?.startedAt||Date.now()))/1000);
   const current=Number(Math.max(1,Math.exp(0.065*elapsed*1.5)).toFixed(2));
@@ -184,7 +184,7 @@ function resolveCrash(round,action){
   if(current>=crashPoint)return {outcome:'loss',crashPoint,current,payout:0};
   return {outcome:'active',current,payout:0,continue:true};
 }
-function resolveGame(gameId, random, action, betDls, state) {
+export function resolveGame(gameId, random, action, betDls, state) {
   if (gameId === 'coinflip') {
     const choice = action.choice === 'tails' ? 'tails' : action.choice === 'heads' ? 'heads' : null;
     if (!choice) return { outcome:'invalid', payout:0, error:'invalid_choice' };
@@ -266,7 +266,7 @@ function resolveGame(gameId, random, action, betDls, state) {
   }
   return {outcome:'invalid',payout:0,error:'unsupported_game'};
 }
-function minesMultiplier(size,mineCount,revealed) {
+export function minesMultiplier(size,mineCount,revealed) {
   if(revealed<=0)return 1;
   const total=size*size; let prob=1;
   for(let i=0;i<revealed;i++)prob*=(total-mineCount-i)/(total-i);
