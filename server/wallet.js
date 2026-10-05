@@ -45,7 +45,7 @@ async function ensureWallet(session,mongo,userId){
   return {...wallet,userId,balancesWl};
 }
 function ledgerDoc({userId,username,type,currency,amount,amountWl,beforeWl,afterWl,referenceId,metadata={}}){
-  return {id:id('txn'),userId,username,type,currency,amount,amountWl,balanceBefore:fromWl(currency,beforeWl),balanceAfter:fromWl(currency,afterWl),balanceBeforeWl:beforeWl,balanceAfterWl:afterWl,referenceId:referenceId||null,metadata,createdAt:new Date()};
+  return {id:id('txn'),userId,username,type,currency,amount,amountWl,amountDls:amountWl/100,balanceBefore:fromWl(currency,beforeWl),balanceAfter:fromWl(currency,afterWl),balanceBeforeWl:beforeWl,balanceAfterWl:afterWl,referenceId:referenceId||null,metadata,createdAt:new Date()};
 }
 async function mutateCurrency(session,mongo,{userId,username,type,currency,amountWl,referenceId,metadata}){
   const wallet=await ensureWallet(session,mongo,userId);
@@ -250,6 +250,60 @@ export function installWalletRoutes(app,{sessionUser,getGtpsSecret,gtpsBridgeUrl
       if(error.code==='WALLET_WRITE_CONFLICT')return res.status(409).json({ok:false,error:'wallet_write_conflict'});
       res.status(500).json({ok:false,error:'withdrawal_failed'});
     }
+  });
+
+  app.get('/api/admin/reconciliation',async(req,res)=>{
+    const admin=await requireAuth(req,res,sessionUser); if(!admin||!admin.isAdmin)return res.status(403).json({ok:false,error:'admin_required'});
+    const mongo=await getMongoDb();
+    const [wallets,ledger]=await Promise.all([
+      mongo.collection('wallets').find({},{projection:{_id:0,userId:1,balancesWl:1}}).toArray(),
+      mongo.collection('ledger').find({},{projection:{_id:0,userId:1,currency:1,amountWl:1}}).toArray()
+    ]);
+    const sums=new Map();
+    for(const row of ledger){
+      const key=String(row.userId); const current=sums.get(key)||{WL:0,DL:0,BGL:0};
+      const currency=normalizeCurrency(row.currency||'DL'); if(currency) current[currency]+=Number(row.amountWl||0);
+      sums.set(key,current);
+    }
+    const discrepancies=[];
+    for(const wallet of wallets){
+      const actual=cleanBalances(wallet.balancesWl); const expected=sums.get(String(wallet.userId))||{WL:0,DL:0,BGL:0};
+      for(const currency of CURRENCIES){
+        const delta=actual[currency]-expected[currency];
+        if(delta!==0) discrepancies.push({userId:wallet.userId,currency,balance:fromWl(currency,actual[currency]),ledgerBalance:fromWl(currency,expected[currency]),delta:fromWl(currency,delta),deltaWl:delta});
+      }
+    }
+    res.json({ok:true,consistent:discrepancies.length===0,checkedWallets:wallets.length,discrepancies,checkedAt:new Date().toISOString(),baseUnit:'WL'});
+  });
+
+  app.get('/api/admin/withdrawals',async(req,res)=>{
+    const admin=await requireAuth(req,res,sessionUser); if(!admin||!admin.isAdmin)return res.status(403).json({ok:false,error:'admin_required'});
+    const mongo=await getMongoDb(); const withdrawals=await mongo.collection('withdrawals').find({}).sort({createdAt:-1}).limit(200).toArray();
+    res.json({ok:true,withdrawals:withdrawals.map(({_id,...x})=>x)});
+  });
+
+  app.post('/api/admin/withdrawals/:id/reconcile',async(req,res)=>{
+    const admin=await requireAuth(req,res,sessionUser); if(!admin||!admin.isAdmin)return res.status(403).json({ok:false,error:'admin_required'});
+    const withdrawalId=String(req.params.id); const action=String(req.body?.action||'');
+    if(!['complete','fail_refund'].includes(action))return res.status(400).json({ok:false,error:'invalid_reconcile_action'});
+    try{
+      const result=await withMongoTransaction(async(session,db)=>{
+        const w=await db.collection('withdrawals').findOne({id:withdrawalId},{session});
+        if(!w)return {error:'withdrawal_not_found'}; if(!['PENDING','UNKNOWN'].includes(w.status))return {error:'withdrawal_already_final',status:w.status};
+        const user=await db.collection('users').findOne({id:w.userId},{session}); if(!user)return {error:'user_not_found'};
+        const changed=await db.collection('withdrawals').updateOne({id:withdrawalId,status:{$in:['PENDING','UNKNOWN']}},{$set:{status:action==='complete'?'COMPLETED':'FAILED',reconciledBy:admin.username,reconciledAt:new Date()}},{session});
+        if(changed.modifiedCount!==1)return {error:'withdrawal_already_final'};
+        let wallet=null;
+        if(action==='fail_refund'){
+          const r=await mutateCurrency(session,db,{userId:user.id,username:user.username,type:'WITHDRAW_REFUND',currency:normalizeCurrency(w.currency)||'DL',amountWl:Math.max(0,Number(w.amountWl)||0),referenceId:withdrawalId,metadata:{reason:'admin_reconcile',admin:admin.username}});
+          wallet=publicWallet({balancesWl:r.balancesWl});
+        }
+        return {status:action==='complete'?'COMPLETED':'FAILED',wallet};
+      });
+      if(result.error==='withdrawal_not_found')return res.status(404).json({ok:false,error:result.error});
+      if(result.error)return res.status(409).json({ok:false,error:result.error,status:result.status});
+      res.json({ok:true,status:result.status,wallet:result.wallet||await getWallet((await sessionUser(req)).id)});
+    }catch(error){res.status(500).json({ok:false,error:'reconciliation_failed'});}
   });
 
   app.get('/api/economy/currencies',async(_req,res)=>{
