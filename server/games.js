@@ -152,8 +152,8 @@ export function installGameRoutes(app, economy, options = {}) {
     p.status='settling';
     const multiplier=auto?Math.max(1,crashGlobal.multiplier):Math.max(1,crashGlobal.multiplier);
     const result=await economy.creditGameResult(p.userId,p.amountDls*multiplier,{id:p.roundId,gameId:'crash-global',result:{outcome:'win',current:multiplier,multiplier}});
-    if(!result.ok)return null;
-    p.status='cashed';p.cashedAt=multiplier;p.payoutDls=Number((p.amountDls*multiplier).toFixed(2)); persistCrash();
+    if(!result.ok){p.status='active'; try{await (await getMongoDb()).collection('crashPlayers').updateOne({roundId:p.roundId,userId:p.userId,status:'settling'},{$set:{status:'active',updatedAt:Date.now()}});}catch{} return null;}
+    p.status='cashed';p.cashedAt=multiplier;p.payoutDls=Number((p.amountDls*multiplier).toFixed(2)); try{await (await getMongoDb()).collection('crashPlayers').updateOne({roundId:p.roundId,userId:p.userId,status:'settling'},{$set:{status:p.status,cashedAt:p.cashedAt,payoutDls:p.payoutDls,updatedAt:Date.now()}});}catch{} persistCrash();
     return result;
   }
 
@@ -186,9 +186,9 @@ export function installGameRoutes(app, economy, options = {}) {
     const db=await getMongoDb(); const p=await db.collection('crashPlayers').findOneAndUpdate({roundId:crashGlobal.roundId,userId:user.id,status:'active'},{$set:{status:'settling',updatedAt:Date.now()}},{returnDocument:'after'});
     if(!p||p.roundId!==crashGlobal.roundId)return res.status(404).json({ok:false,error:'no_active_bet'});
     if(crashGlobal.phase!=='flying'||p.status!=='active')return res.status(409).json({ok:false,error:'cashout_unavailable'});
-    crashGlobal.players.set(user.id,p); const result=await settleCrashPlayer(p,false);
+    p.status='active'; crashGlobal.players.set(user.id,p); const result=await settleCrashPlayer(p,false);
     if(!result)return res.status(500).json({ok:false,error:'settlement_failed'});
-    await db.collection('crashPlayers').updateOne({roundId:p.roundId,userId:p.userId},{$set:{...p,updatedAt:Date.now()}}); res.json({ok:true,result:{outcome:'win',current:p.cashedAt,multiplier:p.cashedAt,payout:p.payoutDls},balanceDls:result.balance,state:publicCrashState()});
+    res.json({ok:true,result:{outcome:'win',current:p.cashedAt,multiplier:p.cashedAt,payout:p.payoutDls},balanceDls:result.balance,state:publicCrashState()});
   });
   app.post('/api/crash/cancel', async (req,res) =>{
     const user=await requireUser(req,res);if(!user)return;
