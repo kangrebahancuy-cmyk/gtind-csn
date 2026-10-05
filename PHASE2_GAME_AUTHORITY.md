@@ -1,5 +1,7 @@
 # GTIND-CSN Phase 2 — Game Authority
 
+**Status: DONE — server-authoritative game/economy migration and hardening completed.**
+
 This phase adds a server-authoritative game-round API.
 
 ## Core rules
@@ -48,6 +50,10 @@ Important:
 - Game payout settlement is idempotent by round ID in the economy ledger.
 - Economy writes use SQLite transactions and optimistic version checks to reject stale concurrent writes.
 - Regression tests cover deterministic RNG, Crash seed derivation/cap, Blackjack deck/scoring, Mines, Towers, Roulette (including unknown-key rejection), Keno, and Crash.
+
+## Verification note
+
+GitHub Actions workflow is present and configured for Node 24, Vite build, tests, and server syntax checks. The GitHub connector currently reports no workflow run for the latest commit, so CI is **not** claimed as passed from this environment. Source-level regression coverage and repository searches were completed; the final deployment should still execute `npm ci`, `npm test`, `npm run build`, and the syntax checks.
 
 ## Production requirement
 Phase 2 game authority now has transactional local persistence and concurrency conflict detection for the economy. High-value production still requires a deployment with durable shared storage (not ephemeral/serverless disk) and the true shared Crash/PvP services described below.
