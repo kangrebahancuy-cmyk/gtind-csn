@@ -78,3 +78,24 @@ export async function updateProfile(user,patch){
 }
 export function avatarCatalog(){ return AVATARS; }
 export function tierCatalog(){ return TIERS; }
+
+export function installProgressionRoutes(app,{sessionUser}){
+  app.get('/api/profile/me',async(req,res)=>{
+    const user=await sessionUser(req); if(!user)return res.status(401).json({ok:false,error:'not_authenticated'});
+    await ensurePlayer(user); res.json({ok:true,progression:await getProgression(user.id)});
+  });
+  app.get('/api/profile/:username',async(req,res)=>{
+    const username=String(req.params.username||'').trim().toLowerCase(), mongo=await getMongoDb();
+    const user=await mongo.collection('users').findOne({usernameNormalized:username},{projection:{id:1,username:1}});
+    if(!user)return res.status(404).json({ok:false,error:'profile_not_found'});
+    const progression=await getProgression(user.id);
+    if(progression.profile.public===false)return res.status(404).json({ok:false,error:'profile_private'});
+    res.json({ok:true,progression});
+  });
+  app.patch('/api/profile/me',async(req,res)=>{
+    const user=await sessionUser(req); if(!user)return res.status(401).json({ok:false,error:'not_authenticated'});
+    const progression=await updateProfile(user,req.body||{}); if(!progression.ok)return res.status(400).json(progression);
+    res.json({ok:true,progression});
+  });
+  app.get('/api/profile/catalog',async(_req,res)=>res.json({ok:true,avatars:avatarCatalog(),tiers:tierCatalog()}));
+}
