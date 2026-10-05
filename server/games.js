@@ -50,6 +50,11 @@ export function rng(seed) {
     return h.readUInt32BE(0) / 0x100000000;
   };
 }
+export function crashPointFromSeed(seed) {
+  const digest=crypto.createHmac('sha256',String(seed)).update('crash-point').digest();
+  const u=digest.readUInt32BE(0)/0x100000000;
+  return Math.min(10000,Math.max(1,Number((0.99/(1-u)).toFixed(2))));
+}
 function requireUser(req, res) {
   const user = req.__economyUser;
   if (!user) { res.status(401).json({ ok:false,error:'not_authenticated' }); return null; }
@@ -109,11 +114,7 @@ export function installGameRoutes(app, economy, options = {}) {
   if(typeof timer.unref==='function')timer.unref();
   if(!loadCrash()) startCrashRound();
   if(crashGlobal.phase==='crashed' && crashGlobal.nextRoundAt<=Date.now()) startCrashRound();
-  function generateCrashPoint(seed){
-    const digest=crypto.createHmac('sha256',seed).update('crash-point').digest();
-    const u=digest.readUInt32BE(0)/0x100000000;
-    return Math.min(10000,Math.max(1,Number((0.99/(1-u)).toFixed(2))));
-  }
+  function generateCrashPoint(seed){ return crashPointFromSeed(seed); }
   if(crashGlobal.phase==='flying' && Date.now()-crashGlobal.startedAt>0){
     crashGlobal.multiplier=Number(Math.max(1,Math.exp(0.065*((Date.now()-crashGlobal.startedAt)/1000)*1.5)).toFixed(2));
     if(crashGlobal.multiplier>=crashGlobal.crashPoint){crashGlobal.multiplier=crashGlobal.crashPoint;crashGlobal.phase='crashed';crashGlobal.history=[crashGlobal.crashPoint,...crashGlobal.history].slice(0,20);crashGlobal.nextRoundAt=Date.now()+3500;for(const p of crashGlobal.players.values())if(p.status==='active')p.status='busted';persistCrash();}
