@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createPersistentSession, getPersistentSession, deletePersistentSession } from '../server/economy-store.js';
 import {
   rng,
   makeBlackjackDeck,
@@ -49,3 +50,10 @@ assert.equal(active.outcome,'win');
 assert.ok(active.payout >= 100);
 
 console.log('Phase 2 game authority tests passed.');
+
+
+const session = createPersistentSession('phase3-user', 60_000);
+assert.equal(getPersistentSession(session.token)?.userId, 'phase3-user');
+deletePersistentSession(session.token);
+assert.equal(getPersistentSession(session.token), null);
+console.log('Phase 3 persistent session storage tests passed.');
