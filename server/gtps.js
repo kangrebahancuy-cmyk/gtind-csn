@@ -8,7 +8,7 @@ function equalSecret(a,b){
   const aa=Buffer.from(String(a||'')); const bb=Buffer.from(String(b||''));
   return aa.length>0 && aa.length===bb.length && crypto.timingSafeEqual(aa,bb);
 }
-function authorize(req,getSecret){
+export function authorizeGtpsRequest(req,getSecret){
   const secret=String(req.headers['x-gtps-secret']||'');
   return equalSecret(secret,getSecret?.());
 }
@@ -30,7 +30,7 @@ function gtpsClientKey(req){
 
 export function installGtpsRoutes(app,{getGtpsSecret}){
   app.get('/api/gtps/status',async(req,res)=>{
-    if(!authorize(req,getGtpsSecret))return res.status(403).json({ok:false,error:'invalid_secret_key'});
+    if(!authorizeGtpsRequest(req,getGtpsSecret))return res.status(403).json({ok:false,error:'invalid_secret_key'});
     const db=await getMongoDb();
     const [pending,processing,linked]=await Promise.all([
       db.collection('withdrawals').countDocuments({status:'PENDING'}),
