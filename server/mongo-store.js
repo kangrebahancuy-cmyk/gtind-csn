@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-const isTest = process.argv.includes('--test');
+const isTest = process.env.NODE_ENV === 'test' || process.env.NODE_TEST_CONTEXT === 'child' || process.argv.includes('--test');
 const dataDir = path.resolve(process.env.SQLITE_DATA_DIR || './data');
 const configuredPath = process.env.SQLITE_DB_PATH || path.join(dataDir, 'gtind-csn.sqlite');
 const dbPath = isTest ? ':memory:' : path.resolve(configuredPath);
