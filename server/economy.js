@@ -325,6 +325,31 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     res.json({ok:true,users:db.users.map(publicUser)});
   });
 
+  app.get('/api/admin/withdrawals', (req,res) => {
+    const admin=requireAdmin(req,res); if(!admin)return;
+    const db=load();
+    res.json({ok:true,withdrawals:(db.withdrawals||[]).slice(-200).reverse()});
+  });
+
+  app.post('/api/admin/withdrawals/:id/reconcile', (req,res) => {
+    const admin=requireAdmin(req,res); if(!admin)return;
+    const action=String(req.body?.action||'');
+    if(!['complete','fail_refund'].includes(action)) return res.status(400).json({ok:false,error:'invalid_reconcile_action'});
+    const db=load();
+    const w=(db.withdrawals||[]).find(x=>x.id===String(req.params.id));
+    if(!w) return res.status(404).json({ok:false,error:'withdrawal_not_found'});
+    if(!['PENDING','UNKNOWN'].includes(w.status)) return res.status(409).json({ok:false,error:'withdrawal_already_final'});
+    const user=db.users.find(x=>x.id===w.userId);
+    if(!user) return res.status(404).json({ok:false,error:'user_not_found'});
+    if(action==='complete') {
+      w.status='COMPLETED'; w.reconciledBy=admin.username; w.reconciledAt=now(); save(db);
+      return res.json({ok:true,status:w.status,withdrawal:w});
+    }
+    mutateBalance(db,user,Number(w.amountDls),'WITHDRAW_REFUND',w.id,{reason:'admin_reconciliation',admin:admin.username});
+    w.status='FAILED'; w.reconciledBy=admin.username; w.reconciledAt=now(); save(db);
+    res.json({ok:true,status:w.status,withdrawal:w,user:publicUser(user)});
+  });
+
   app.post('/api/gtps/deposit-webhook', (req,res) => {
     const secret=String(req.body?.secretKey || req.headers['x-gtps-secret'] || '');
     if(!secret || secret!==getGtpsSecret()) return res.status(403).json({ok:false,error:'invalid_secret_key'});
