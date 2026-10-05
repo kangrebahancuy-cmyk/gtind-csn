@@ -76,7 +76,7 @@ export function installGameRoutes(app, economy) {
     const action=req.body?.action && typeof req.body.action==='object' ? req.body.action : {};
     const step=Number.isInteger(action.step)?Math.max(0,action.step):0;
     const random=rng(round.serverSeed + ':' + round.clientSeed + ':' + round.nonce + ':' + step);
-    const result=(round.gameId==='coinflip' && action.cashout===true) ? resolveCashout(round, action) : resolveGame(round.gameId,random,action,round.betDls);
+    const result=(round.gameId==='coinflip' && action.cashout===true) ? resolveCashout(round, action) : resolveGame(round.gameId,random,action,round.betDls,round.state);
     const payout=Number((result.payout||0).toFixed(2));
     if (payout < 0 || payout > round.betDls * 100000) return res.status(400).json({ok:false,error:'invalid_payout'});
     const shouldCredit=action.cashout===true || action.final===true || !['coinflip'].includes(round.gameId);
@@ -99,14 +99,12 @@ function resolveCashout(round, action) {
   return {outcome:'cashout',step,multiplier,payout:round.betDls*multiplier,cashedOut:true};
 }
 
-function resolveGame(gameId,r,action,bet) {
+function resolveGame(gameId,r,action,bet,state) {
   switch(gameId) {
     case 'mines': {
-      const size=Math.max(2,Math.min(8,Number(action.gridSize)||5)); const total=size*size; const mineCount=Math.max(1,Math.min(total-1,Number(action.mines)||3));
-      const selected=Number(action.selected); const prior=Array.isArray(action.revealed)?action.revealed.map(Number):[];
-      const key=hash('mines:'+size+':'+mineCount+':'+bet+':'+Math.floor(r()*0xffffffff));
-      const rr=rng(key); const mineSet=new Set(); while(mineSet.size<mineCount) mineSet.add(Math.floor(rr()*total));
-      const revealed=[...new Set(prior)].filter(n=>n>=0&&n<total);
+      const size=Math.max(2,Math.min(8,Number(state?.size)||Number(action.gridSize)||5)); const total=size*size; const mineCount=Math.max(1,Math.min(total-1,Number(state?.mineCount)||Number(action.mines)||3));
+      const selected=Number(action.selected); const mineSet=new Set(Array.isArray(state?.mineMap)?state.mineMap.map(Number):[]);
+      const revealed=Array.isArray(state?.revealed)?state.revealed.map(Number):[];
       if(!Number.isInteger(selected)||selected<0||selected>=total||revealed.includes(selected)) return {outcome:'invalid',payout:0,error:'invalid_tile'};
       const isMine=mineSet.has(selected); const next=[...revealed,selected]; const safeCount=next.filter(n=>!mineSet.has(n)).length;
       const prob=Array.from({length:safeCount},(_,i)=>(total-mineCount-i)/(total-i)).reduce((a,b)=>a*b,1);
@@ -117,7 +115,7 @@ function resolveGame(gameId,r,action,bet) {
     }
     case 'towers': {
       const cols=Math.max(2,Math.min(4,Number(action.columns)||4)); const traps=Math.max(1,Math.min(cols-1,Number(action.traps)||1)); const floor=Math.max(0,Number(action.floor)||0);
-      const rr=rng('tower:'+Math.floor(r()*0xffffffff)+':'+cols+':'+traps); const generated=Array.from({length:8},()=>{const set=new Set();while(set.size<traps)set.add(Math.floor(rr()*cols));return [...set];});
+      const generated=Array.isArray(state?.traps)?state.traps:[]; if(!generated.length)return {outcome:'invalid',payout:0,error:'round_state_missing'};
       const col=Number(action.col); if(!Number.isInteger(col)||col<0||col>=cols||floor>7)return {outcome:'invalid',payout:0,error:'invalid_tile'};
       const isTrap=generated[floor].includes(col); const multipliers=action.multipliers&&Array.isArray(action.multipliers)?action.multipliers.map(Number):[1.28,1.65,2.15,2.8,3.65,4.8,6.3,8.3];
       if(isTrap)return {outcome:'loss',floor,col,traps:generated,payout:0,continue:false};
