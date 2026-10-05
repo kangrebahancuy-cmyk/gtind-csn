@@ -152,6 +152,16 @@ function generateStakeCrashPoint(): number {
   return Math.max(1.00, Number(result.toFixed(2)));
 }
 
+const apiJson = async (url: string, options: RequestInit = {}) => {
+  const response = await fetch(url, {
+    credentials: 'include',
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+  });
+  const data = await response.json().catch(() => ({}));
+  return { response, data };
+};
+
 const realtimeChannel = typeof window !== 'undefined' && 'BroadcastChannel' in window 
   ? new BroadcastChannel('supreme_casino_sync') 
   : null;
@@ -160,38 +170,32 @@ const realtimeChannel = typeof window !== 'undefined' && 'BroadcastChannel' in w
 const GameContext = createContext<GameContextType | undefined>(undefined);
 
 export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [accounts, setAccounts] = useState<StoredAccount[]>(() => {
-    const defaultAccounts: StoredAccount[] = [
-      { username: 'admin99', password: 'admin001', growId: 'admin99', balanceDls: 50000, isAdmin: true, linkCode: '999999' },
-      { username: 'Mytegt', password: 'password', growId: 'Mytegt', balanceDls: 0, linkCode: '123456' },
-    ];
-    const saved = localStorage.getItem('supreme_registered_accounts') || localStorage.getItem('voidps_registered_accounts');
-    if (saved) {
-      try {
-        const parsed: StoredAccount[] = JSON.parse(saved);
-        if (!parsed.some((a) => a.username.toLowerCase() === 'admin99')) {
-          parsed.unshift({ username: 'admin99', password: 'admin001', growId: 'admin99', balanceDls: 50000, isAdmin: true, linkCode: '999999' });
-        }
-        return parsed;
-      } catch {}
-    }
-    return defaultAccounts;
-  });
-
-  const [currentUser, setCurrentUser] = useState<StoredAccount | null>(() => {
-    const savedSession = localStorage.getItem('supreme_active_session') || localStorage.getItem('voidps_active_session');
-    if (savedSession) {
-      try {
-        return JSON.parse(savedSession);
-      } catch {}
-    }
-    return null;
-  });
+  const [accounts, setAccounts] = useState<StoredAccount[]>([]);
+  const [currentUser, setCurrentUser] = useState<StoredAccount | null>(null);
 
   // Ref agar handler WebSocket (yang terpasang sekali) selalu membaca user terbaru,
   // bukan user dari render pertama (stale closure).
   const currentUserRef = useRef<StoredAccount | null>(currentUser);
   currentUserRef.current = currentUser;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await apiJson('/api/auth/me');
+        if (cancelled) return;
+        if (data.authenticated && data.user) {
+          setCurrentUser(data.user);
+          currentUserRef.current = data.user;
+          try {
+            const adminRes = await apiJson('/api/admin/users');
+            if (adminRes.data?.users) setAccounts(adminRes.data.users);
+          } catch {}
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const [gtpsPort, setGtpsPortState] = useState<number>(() => {
     const saved = localStorage.getItem('supreme_gtps_port');
@@ -378,98 +382,92 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     selectedFiat,
   };
 
-  const login = (uname: string, pass: string) => {
-    const cleanUname = uname.trim().toLowerCase();
-    const existing = accounts.find((a) => a.username.toLowerCase() === cleanUname);
-
-    if (!existing) {
-      return { success: false, message: 'Account does not exist. Please Sign Up first.' };
-    }
-    if (existing.password !== pass) {
-      return { success: false, message: 'Incorrect password.' };
-    }
-    if (existing.isBanned) {
-      return { success: false, message: 'This account has been banned by an administrator.' };
-    }
-
-    setCurrentUser(existing);
-    try {
-      localStorage.setItem('supreme_active_session', JSON.stringify(existing));
-      localStorage.setItem('voidps_active_session', JSON.stringify(existing));
-    } catch {}
-    return { success: true, message: 'Logged in successfully.' };
-  };
-
-  const register = (uname: string, pass: string, gId?: string) => {
+  const login = async (uname: string, pass: string) => {
     const cleanUname = uname.trim();
-    if (cleanUname.length < 4) {
-      return { success: false, message: 'Username must be at least 4 characters.' };
-    }
-    if (pass.length < 8) {
-      return { success: false, message: 'Password must be at least 8 characters.' };
-    }
-
-    const exists = accounts.some((a) => a.username.toLowerCase() === cleanUname.toLowerCase());
-    if (exists) {
-      return { success: false, message: 'Username is already taken. Please choose another.' };
-    }
-
-    const newAcc: StoredAccount = {
-      username: cleanUname,
-      password: pass,
-      growId: gId?.trim() || cleanUname,
-      balanceDls: 0, // No free 500 DLS - users deposit & link account
-      linkCode: Math.floor(100000 + Math.random() * 900000).toString(),
-      isBanned: false,
-      isMuted: false,
-      isAdmin: cleanUname.toLowerCase() === 'admin99',
-    };
-
-    setAccounts((prev) => {
-      const updated = [...prev, newAcc];
-      try {
-        localStorage.setItem('supreme_registered_accounts', JSON.stringify(updated));
-        localStorage.setItem('voidps_registered_accounts', JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
-
-    setCurrentUser(newAcc);
     try {
-      localStorage.setItem('supreme_active_session', JSON.stringify(newAcc));
-      localStorage.setItem('voidps_active_session', JSON.stringify(newAcc));
-    } catch {}
-    return { success: true, message: 'Account registered successfully! Please deposit or link your GTPS account.' };
+      let { response, data } = await apiJson('/api/auth/login', {
+        method: 'POST', body: JSON.stringify({ username: cleanUname, password: pass })
+      });
+      if (!response.ok && data.error === 'invalid_credentials') {
+        const legacy = await apiJson('/api/auth/migrate', {
+          method: 'POST',
+          body: JSON.stringify({
+            username: cleanUname,
+            password: pass,
+            growId: '',
+            balanceDls: 0
+          })
+        });
+        if (legacy.response.ok) {
+          data = legacy.data;
+          response = legacy.response;
+        }
+      }
+      if (!response.ok || !data.user) {
+        const messages: Record<string,string> = {
+          invalid_credentials: 'Incorrect username or password.',
+          account_banned: 'This account has been banned by an administrator.',
+        };
+        return { success:false, message:messages[data.error] || 'Login failed.' };
+      }
+      setCurrentUser(data.user);
+      currentUserRef.current = data.user;
+      setAccounts(prev => prev.some(a => a.username.toLowerCase() === data.user.username.toLowerCase())
+        ? prev.map(a => a.username.toLowerCase() === data.user.username.toLowerCase() ? data.user : a)
+        : [...prev, data.user]);
+      return { success:true, message:'Logged in successfully.' };
+    } catch {
+      return { success:false, message:'Server casino tidak merespons.' };
+    }
   };
 
-  const logout = () => {
+  const register = async (uname: string, pass: string, gId?: string) => {
+    const cleanUname = uname.trim();
+    if (cleanUname.length < 4) return { success:false, message:'Username must be at least 4 characters.' };
+    if (pass.length < 8) return { success:false, message:'Password must be at least 8 characters.' };
+    try {
+      const { response, data } = await apiJson('/api/auth/register', {
+        method:'POST',
+        body:JSON.stringify({ username:cleanUname, password:pass, growId:gId?.trim() || '' })
+      });
+      if (!response.ok || !data.user) {
+        const messages: Record<string,string> = { username_taken:'Username is already taken. Please choose another.' };
+        return { success:false, message:messages[data.error] || 'Registration failed.' };
+      }
+      setCurrentUser(data.user);
+      currentUserRef.current = data.user;
+      setAccounts(prev => [...prev.filter(a => a.username.toLowerCase() !== data.user.username.toLowerCase()), data.user]);
+      return { success:true, message:'Account registered successfully! Please deposit or link your GTPS account.' };
+    } catch {
+      return { success:false, message:'Server casino tidak merespons.' };
+    }
+  };
+
+  const logout = async () => {
+    try { await apiJson('/api/auth/logout', { method:'POST', body:'{}' }); } catch {}
     setCurrentUser(null);
-    try {
-      localStorage.removeItem('supreme_active_session');
-      localStorage.removeItem('voidps_active_session');
-    } catch {}
+    currentUserRef.current = null;
   };
 
-  const updateUserGrowId = (growId: string) => {
+  const updateUserGrowId = async (growId: string) => {
     const cu = currentUserRef.current;
     if (!cu) return;
     const cleanGrow = String(growId || '').trim();
     if (!cleanGrow) return;
-    // gtpsLinked hanya true di sini: dikonfirmasi dari /link nyata di game
-    const updated = { ...cu, growId: cleanGrow, gtpsLinked: true };
-    setCurrentUser(updated);
     try {
-      localStorage.setItem('supreme_active_session', JSON.stringify(updated));
-      localStorage.setItem('voidps_active_session', JSON.stringify(updated));
-    } catch {}
-    setAccounts((prev) => {
-      const next = prev.map((a) => a.username.toLowerCase() === cu.username.toLowerCase() ? updated : a);
-      try {
-        localStorage.setItem('supreme_registered_accounts', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
-    showToast(`Linked with GTPS Character: ${cleanGrow}!`, 'success', 'GTPS Account Connected');
+      const { response, data } = await apiJson('/api/account/growid', {
+        method:'POST', body:JSON.stringify({ growId:cleanGrow })
+      });
+      if (!response.ok || !data.user) {
+        showToast(data.error === 'growid_already_linked' ? 'GrowID sudah terhubung ke akun lain.' : 'Gagal menyimpan GrowID.', 'error', 'GTPS Link');
+        return;
+      }
+      setCurrentUser(data.user); currentUserRef.current = data.user;
+      setAccounts(prev => prev.map(a => a.username.toLowerCase() === data.user.username.toLowerCase() ? data.user : a));
+      showToast(`Linked with GTPS Character: ${cleanGrow}!`, 'success', 'GTPS Account Connected');
+    } catch {
+      showToast('Server casino tidak merespons.', 'error', 'GTPS Link');
+    }
   };
 
   // Lepas link GTPS dari web: server + bridge Lua ikut dilepas
@@ -762,13 +760,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {}
   };
 
-  const deposit = (dlsAmount: number) => {
-    if (!currentUser) return;
-    if (dlsAmount <= 0) return;
-    updateCurrentUserBalance(balanceDls + dlsAmount);
-    triggerBalanceGain(dlsAmount);
-    sound.playCashout();
-    showToast(`Successfully deposited ${toActiveAmount(dlsAmount)} ${currencyLabel}!`, 'success', 'Deposit Confirmed');
+  const deposit = (_dlsAmount: number) => {
+    showToast('Deposit diproses otomatis melalui GTPS /deposit. Jangan kredit saldo dari browser.', 'info', 'GTPS Deposit');
   };
 
   // Withdraw nyata: server -> bridge Lua gtps.cloud -> item masuk backpack in-game.
@@ -818,45 +811,30 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { success: true, message: msg };
   };
 
-  const tip = (dlsAmount: number, targetUser: string, message?: string) => {
-    if (!currentUser) {
-      return { success: false, message: 'Please Sign In to tip.' };
+  const tip = async (dlsAmount: number, targetUser: string, message?: string) => {
+    if (!currentUser) return { success:false, message:'Please Sign In to tip.' };
+    if (!targetUser.trim() || targetUser.trim().toLowerCase() === user.username.toLowerCase()) {
+      return { success:false, message:'Please enter a valid recipient username.' };
     }
-    if (!targetUser.trim()) {
-      return { success: false, message: 'Please enter recipient username.' };
+    if (dlsAmount <= 0) return { success:false, message:'Please enter a valid tip amount.' };
+    try {
+      const { response, data } = await apiJson('/api/economy/tip', {
+        method:'POST', body:JSON.stringify({ amountDls:dlsAmount, targetUser:targetUser.trim(), message:message || '' })
+      });
+      if (!response.ok) {
+        const messages: Record<string,string> = { insufficient_balance:'Insufficient balance to tip.', recipient_not_found:'Recipient account does not exist.', self_tip:'You cannot tip yourself.' };
+        return { success:false, message:messages[data.error] || 'Tip failed.' };
+      }
+      if (data.user) { setCurrentUser(data.user); currentUserRef.current = data.user; }
+      setAccounts(prev => prev.map(a => a.username.toLowerCase() === targetUser.trim().toLowerCase() && data.recipient ? data.recipient : a));
+      sound.playCashout();
+      const formattedAmount = `${toActiveAmount(dlsAmount)} ${currencyLabel}`;
+      const resMsg = `Tipped ${formattedAmount} to ${targetUser.trim()}!${message ? ` ("${message}")` : ''}`;
+      showToast(resMsg, 'success', 'Tip Sent');
+      return { success:true, message:resMsg };
+    } catch {
+      return { success:false, message:'Server casino tidak merespons.' };
     }
-    if (targetUser.trim().toLowerCase() === user.username.toLowerCase()) {
-      return { success: false, message: 'You cannot tip yourself.' };
-    }
-    if (dlsAmount <= 0) {
-      return { success: false, message: 'Please enter a valid tip amount.' };
-    }
-    if (balanceDls < dlsAmount) {
-      return { success: false, message: 'Insufficient balance to tip.' };
-    }
-
-    updateCurrentUserBalance(balanceDls - dlsAmount);
-
-    // Credit recipient account if already registered in local accounts
-    setAccounts((prev) =>
-      prev.map((acc) => {
-        if (acc.username.toLowerCase() === targetUser.trim().toLowerCase()) {
-          return { ...acc, balanceDls: (acc.balanceDls || 0) + dlsAmount };
-        }
-        return acc;
-      })
-    );
-
-    sound.playCashout();
-
-    const formattedAmount = `${toActiveAmount(dlsAmount)} ${currencyLabel}`;
-
-    const resMsg = `Tipped ${formattedAmount} to ${targetUser.trim()}! ${message ? `("${message}")` : ''}`;
-    showToast(resMsg, 'success', 'Tip Sent');
-    return {
-      success: true,
-      message: resMsg,
-    };
   };
 
   // ==========================================
