@@ -33,13 +33,14 @@ realtimeEvents:[[{id:1},{unique:true,name:'uniq_realtime_event_id'}],[{createdAt
 profiles:[[{userId:1},{unique:true,name:'uniq_profile_user'}],[{username:1},{name:'idx_profile_username'}]],
 playerStats:[[{userId:1},{unique:true,name:'uniq_player_stats_user'}],[{wageredDls:-1},{name:'idx_player_stats_wagered'}]],
 playerXp:[[{userId:1},{unique:true,name:'uniq_player_xp_user'}],[{xp:-1},{name:'idx_player_xp'}]],
-xpEvents:[[{id:1},{unique:true,name:'uniq_xp_event_id'}],[{userId:1,createdAt:-1},{name:'idx_xp_event_user_created'}]]
+xpEvents:[[{id:1},{unique:true,name:'uniq_xp_event_id'}],[{userId:1,createdAt:-1},{name:'idx_xp_event_user_created'}]],
+chatMessages:[[{id:1},{unique:true,name:'uniq_chat_message_id'}],[{expiresAt:1},{expireAfterSeconds:0,name:'ttl_chat_messages'}],[{createdAt:-1},{name:'idx_chat_created'}]]
 };
 export async function ensureMongoSchema(){
  const db=await getMongoDb();
  for(const [name,oldIndex] of [['ledger','uniq_ledger_reference'],['withdrawals','uniq_withdrawal_idempotency']]) { try { await db.collection(name).dropIndex(oldIndex); } catch {} }
  for(const [name,indexes] of Object.entries(INDEXES)) for(const [key,options] of indexes) await db.collection(name).createIndex(key,options);
- await db.collection('meta').updateOne({_id:'schema'},{$set:{version:5,updatedAt:new Date()}},{upsert:true});
+ await db.collection('meta').updateOne({_id:'schema'},{$set:{version:6,updatedAt:new Date()}},{upsert:true});
  return db;
 }
 export async function withMongoTransaction(work){
