@@ -61,6 +61,21 @@ async function requireUser(req, res) {
   return user;
 }
 
+async function mongoUpsertState(collectionName, id, doc) {
+  const db=await getMongoDb();
+  await db.collection(collectionName).replaceOne({id},{...doc,id},{upsert:true});
+}
+async function mongoGetState(collectionName,id){ return (await getMongoDb()).collection(collectionName).findOne({id}); }
+async function mongoClaimLease(name, owner, ttlMs){
+  const db=await getMongoDb(); const now=new Date(), until=new Date(Date.now()+ttlMs);
+  const r=await db.collection('leases').findOneAndUpdate(
+    {$or:[{_id:name,owner},{_id:name,expiresAt:{$lte:now}}]},
+    {$set:{_id:name,owner,expiresAt:until,updatedAt:now}},
+    {upsert:true,returnDocument:'after'}
+  );
+  return r?.owner===owner;
+}
+
 export function installGameRoutes(app, economy, options = {}) {
   const broadcast = typeof options.broadcast === 'function' ? options.broadcast : () => {};
   const persistCrash = () => {
