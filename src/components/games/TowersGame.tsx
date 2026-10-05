@@ -94,7 +94,7 @@ export const TowersGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     if (!user.isAuthenticated) { setAuthModalOpen(true); return; }
     if (!checkCanPlayGame('towers', 'Towers')) return;
     const b = fromActiveAmount(Number(bet)); if (!b || b <= 0) return;
-    const started=await startGameRound('towers',b);
+    const started=await startGameRound('towers',b,undefined,{difficulty});
     if(!started.success||!started.roundId)return;
     setRoundId(started.roundId); setTraps([]); setFloor(0); setUserPicks([]); setRoundBet(b); setPlaying(true); setResult(null); setDeadPick(null); setCashedOutInfo(null); setActiveGameSession({gameId:'towers',gameTitle:'Towers'});
     sound.playClick();
