@@ -275,6 +275,19 @@ export const CaseBattlesGame: React.FC<{ onBack: () => void }> = ({ onBack }) =>
     createdAt: Number(b.createdAt || Date.now()),
   });
 
+  useEffect(() => {
+    if (view !== 'lobby') return;
+    let stopped = false;
+    const refresh = async () => {
+      const data = await fetch('/api/games/case-battles/lobby', { credentials: 'include' }).then(r => r.json()).catch(() => null);
+      if (stopped || !data?.ok || !Array.isArray(data.battles)) return;
+      setBattles(data.battles.map(serverBattleToUi));
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 3000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [view, availableCases]);
+
   const handleCreateBattle = async () => {
     if (orderedSelectedCases.length === 0) {
       showToast('Please add at least 1 case for the battle.', 'error', 'No Cases');
@@ -299,7 +312,6 @@ export const CaseBattlesGame: React.FC<{ onBack: () => void }> = ({ onBack }) =>
       showToast(response?.error || 'Server battle unavailable', 'error', 'Case Battles');
       return;
     }
-    setCurrentUser?.((prev: any) => prev ? { ...prev, balanceDls: Number(response.balanceDls ?? prev.balanceDls) } : prev);
     const uiBattle = serverBattleToUi(response.battle);
     setBattles(prev => [uiBattle, ...prev.filter(b => b.id !== uiBattle.id)]);
     sound.playClick();
@@ -331,7 +343,6 @@ export const CaseBattlesGame: React.FC<{ onBack: () => void }> = ({ onBack }) =>
     } else {
       showToast(`You lost to ${result?.winnerUsername || 'the opponent'}.`, 'info', 'Case Battle PvP');
     }
-    setCurrentUser?.((prev: any) => prev ? { ...prev, balanceDls: Number(response.balanceDls ?? prev.balanceDls) } : prev);
   };
 
   // Cancel an open battle created by the user
@@ -347,7 +358,6 @@ export const CaseBattlesGame: React.FC<{ onBack: () => void }> = ({ onBack }) =>
       return;
     }
     setBattles(prev => prev.filter(b => b.id !== battle.id));
-    setCurrentUser?.((prev: any) => prev ? { ...prev, balanceDls: Number(response.balanceDls ?? prev.balanceDls) } : prev);
     showToast('Battle cancelled and stake refunded by server.', 'info', 'Battle Cancelled');
   };
 
