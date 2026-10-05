@@ -100,7 +100,7 @@ function resolveCashout(round, action) {
 function resolveGame(gameId,r,action,bet) {
   switch(gameId) {
     case 'coinflip': {
-      const win=r()<0.5; const choice=action.choice||'heads'; const step=Math.max(0,Number(action.step)||0); const mults=[1.92,3.84,7.68,15.36,30.72,61.44,122.88,245.76,491.52]; const multiplier=mults[Math.min(step,mults.length-1)]||1.92; const cashout=action.cashout===true; const lossPayout=0; const payout=cashout?bet*(step>0?mults[Math.min(step-1,mults.length-1)]:1):0; return { outcome:win?'win':'loss', choice, winningSide:win?choice:(choice==='heads'?'tails':'heads'), step, multiplier:win?multiplier:0, payout:win?lossPayout:payout, cashedOut:cashout&&win };
+      const win=r()<0.5; const choice=action.choice||'heads'; const step=Math.max(0,Number(action.step)||0); const mults=[1.92,3.84,7.68,15.36,30.72,61.44,122.88,245.76,491.52]; const multiplier=mults[Math.min(step,mults.length-1)]||1.92; const cashout=action.cashout===true; const payout=action.final&&win?bet*multiplier:(cashout?bet*(step>0?mults[Math.min(step-1,mults.length-1)]:1):0); return { outcome:win?'win':'loss', choice, winningSide:win?choice:(choice==='heads'?'tails':'heads'), step, multiplier:win?multiplier:0, payout:win?lossPayout:payout, cashedOut:cashout&&win };
     }
     case 'roulette': {
       const n=Math.floor(r()*37); const choice=String(action.choice??'0'); let win=false;
