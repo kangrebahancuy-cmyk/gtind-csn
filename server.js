@@ -1,5 +1,6 @@
 import express from 'express';
 import http from 'http';
+import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -16,6 +17,15 @@ const PORT = process.env.PORT || 3000;
 // Enable JSON body parsing
 app.use(express.json({ limit: '64kb' }));
 app.disable('x-powered-by');
+app.use((req,res,next)=>{
+  const requestId=String(req.headers['x-request-id']||'').slice(0,128) || crypto.randomUUID();
+  res.setHeader('X-Request-Id',requestId);
+  res.setHeader('X-Content-Type-Options','nosniff');
+  res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy','camera=(), microphone=(), geolocation=()');
+  if(req.secure || String(req.headers['x-forwarded-proto']||'').includes('https')) res.setHeader('Strict-Transport-Security','max-age=31536000; includeSubDomains');
+  next();
+});
 
 // Health check endpoint for Render.com
 app.get('/healthz', (req, res) => {
@@ -25,6 +35,17 @@ app.get('/healthz', (req, res) => {
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
   });
+});
+
+app.get('/readyz', (req,res) => {
+  try {
+    // Loading the economy store verifies that the configured persistent DB is readable.
+    const { loadEconomyState } = await import('./server/economy-store.js');
+    loadEconomyState();
+    res.json({status:'ready',timestamp:new Date().toISOString()});
+  } catch (error) {
+    res.status(503).json({status:'not_ready',error:'persistent_store_unavailable'});
+  }
 });
 
 // Serve Vite production build from dist/
