@@ -78,6 +78,8 @@ export function installGameRoutes(app, economy) {
     const betDls=Number(req.body?.betDls);
     if (!SERVER_AUTH_GAMES.has(gameId)) return res.status(409).json({ok:false,error:'game_not_server_authoritative'});
     if (!gameId || !Number.isFinite(betDls) || betDls<=0 || betDls>100000000) return res.status(400).json({ok:false,error:'invalid_bet'});
+    if(gameId==='cases'){const c=caseCatalog.get(String(req.body?.caseId||''));const count=Math.max(1,Math.min(4,Number(req.body?.count)||1));if(!c)return res.status(400).json({ok:false,error:'case_not_found'});if(Math.abs(c.price*count-betDls)>0.01)return res.status(400).json({ok:false,error:'case_price_mismatch'});}
+    if(gameId==='case-battles'&&!caseCatalog.has(String(req.body?.caseId||'')))return res.status(400).json({ok:false,error:'case_not_found'});
     const result=economy.debitForGame(user.id,betDls,gameId);
     if (!result.ok) return res.status(400).json({ok:false,error:result.error});
     const serverSeed=crypto.randomBytes(32).toString('hex');
@@ -99,7 +101,7 @@ export function installGameRoutes(app, economy) {
       const rr=rng(serverSeed+':towers'); round.state={floor:0,cols,traps,trapsMap:Array.from({length:8},()=>{const set=new Set();while(set.size<traps)set.add(Math.floor(rr()*cols));return [...set];}),traps:Array.from({length:8},()=>[])}; round.state.traps=round.state.trapsMap; delete round.state.trapsMap;
     }
     rounds.set(round.id,round); persist();
-    res.json({ok:true,roundId:round.id,serverSeedHash:commitment,clientSeed,nonce,balanceDls:result.balance});
+    res.json({ok:true,roundId:round.id,serverSeedHash:commitment,clientSeed,nonce,balanceDls:result.balance,initialResult:round.initialResult||undefined});
   });
 
   app.post('/api/games/resolve', (req,res) => {
@@ -111,7 +113,7 @@ export function installGameRoutes(app, economy) {
     const step=Number.isInteger(action.step)?Math.max(0,action.step):0;
     const random=rng(round.serverSeed + ':' + round.clientSeed + ':' + round.nonce + ':' + step);
     if(round.gameId==='blackjack' && action.type==='double' && !round.state?.doubled){ const extra=economy.debitForGame(user.id,round.betDls,'blackjack-double'); if(!extra.ok)return res.status(400).json({ok:false,error:extra.error}); round.state.doubled=true; round.totalBetDls=round.betDls*2; }
-    const result=round.gameId==='blackjack' ? resolveBlackjack(round,action) : (round.gameId==='crash' ? resolveCrash(round,action) : (round.gameId==='case-battles' ? resolveCaseBattle(round,random,action) : ((round.gameId==='coinflip' && action.cashout===true) ? resolveCashout(round, action) : resolveGame(round.gameId,random,action,round.betDls,round.state))));
+    const result=round.gameId==='blackjack' ? (action.type==='initial' ? (()=>{const p=round.state.player,d=round.state.dealer;const ps=blackjackScore(p),ds=blackjackScore(d);if(ps===21){round.state.phase='finished';return {outcome:ds===21?'push':'win',player:p,dealer:d,payout:ds===21?round.betDls:round.betDls*2.5,score:ps,dealerScore:ds};}return {outcome:'continue',player:p,dealer:[d[0]],payout:0,score:ps,dealerScore:blackjackScore([d[0]])};})() : resolveBlackjack(round,action) : (round.gameId==='crash' ? resolveCrash(round,action) : (round.gameId==='case-battles' ? resolveCaseBattle(round,random,action) : ((round.gameId==='coinflip' && action.cashout===true) ? resolveCashout(round, action) : resolveGame(round.gameId,random,action,round.betDls,round.state))));
     const payout=Number((result.payout||0).toFixed(2));
     if (payout < 0 || payout > round.betDls * 100000) return res.status(400).json({ok:false,error:'invalid_payout'});
     const shouldCredit=(round.gameId==='blackjack' ? result.outcome!=='continue' : (round.gameId==='crash' ? action.type==='cashout' || result.outcome==='loss' : (action.cashout===true || action.final===true || !['coinflip'].includes(round.gameId))));
