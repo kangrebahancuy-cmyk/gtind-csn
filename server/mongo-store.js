@@ -136,13 +136,36 @@ function matches(doc, filter = {}) {
       if (!Array.isArray(expected) || !expected.every(f => matches(doc, f))) return false;
       continue;
     }
+
     const value = getPath(doc, key);
-    if (expected && typeof expected === 'object' && !Array.isArray(expected) && !(expected instanceof Date) && !(expected instanceof RegExp)) {
-      const operatorKeys = Object.keys(expected).filter(k => k.startsWith('
+
+    if (expected instanceof RegExp) {
       if (!expected.test(String(value ?? ''))) return false;
-    } else if (!equal(value, expected)) {
-      return false;
+      continue;
     }
+
+    if (expected && typeof expected === 'object' && !Array.isArray(expected) && !(expected instanceof Date)) {
+      const operatorKeys = Object.keys(expected).filter(k => k.startsWith('$'));
+
+      if (operatorKeys.length === 0) {
+        if (!equal(value, expected)) return false;
+        continue;
+      }
+
+      for (const [op, wanted] of Object.entries(expected)) {
+        if (op === '$options') continue;
+        if (op === '$regex') {
+          const flags = String(expected.$options || '');
+          const re = new RegExp(String(wanted), flags);
+          if (!re.test(String(value ?? ''))) return false;
+        } else if (!compare(value, op, wanted)) {
+          return false;
+        }
+      }
+      continue;
+    }
+
+    if (!equal(value, expected)) return false;
   }
   return true;
 }
