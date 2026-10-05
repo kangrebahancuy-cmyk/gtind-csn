@@ -207,11 +207,8 @@ export function installGameRoutes(app, economy, options = {}) {
   });
   app.delete('/api/games/cases/catalog/:id', async (req,res) =>{const user=await requireUser(req,res);if(!user)return;if(!user.isAdmin)return res.status(403).json({ok:false,error:'admin_required'});caseCatalog.delete(String(req.params.id));persistCases();res.json({ok:true});});
   app.get('/api/games/case-battles/lobby', async (req,res) => {
-    const battles=[...caseBattles.values()]
-      .filter(b=>Date.now()-b.createdAt < 10*60*1000)
-      .sort((a,b)=>b.createdAt-a.createdAt)
-      .slice(0,100)
-      .map(b=>publicCaseBattle(b,true));
+    const battleDocs=await (await getMongoDb()).collection('caseBattles').find({status:'open',createdAt:{$gt:Date.now()-10*60*1000}}).sort({createdAt:-1}).limit(100).toArray();
+    const battles=battleDocs.map(({_id,...b})=>publicCaseBattle(b,true));
     res.json({ok:true,battles});
   });
 
@@ -236,19 +233,26 @@ export function installGameRoutes(app, economy, options = {}) {
       players:[{userId:user.id,username:user.username,betDls}],
       serverSeed,serverSeedHash:hash(serverSeed)
     };
-    caseBattles.set(battle.id,battle);persistCaseBattles();
+    await (await getMongoDb()).collection('caseBattles').insertOne(battle);
+    caseBattles.set(battle.id,battle);
     res.json({ok:true,battle:publicCaseBattle(battle),balanceDls:debit.balance});
   });
 
   app.post('/api/games/case-battles/join', async (req,res) => {
     const user=await requireUser(req,res);if(!user)return;
-    const battle=caseBattles.get(String(req.body?.battleId||''));
+    const battle=await mongoGetState('caseBattles',String(req.body?.battleId||''));
     if(!battle)return res.status(404).json({ok:false,error:'battle_not_found'});
     if(battle.status!=='open')return res.status(409).json({ok:false,error:'battle_not_open'});
     if(battle.players.some(p=>p.userId===user.id))return res.status(409).json({ok:false,error:'already_in_battle'});
     const debit=await economy.debitForGame(user.id,battle.totalCostPerPlayer,'case-battle-pvp');
     if(!debit.ok)return res.status(400).json({ok:false,error:debit.error});
-    battle.players.push({userId:user.id,username:user.username,betDls:battle.totalCostPerPlayer});
+    const claim=await (await getMongoDb()).collection('caseBattles').findOneAndUpdate(
+      {id:battle.id,status:'open','players.0.userId':{$ne:user.id}},
+      {$set:{status:'finished',updatedAt:Date.now()},$push:{players:{userId:user.id,username:user.username,betDls:battle.totalCostPerPlayer}},$setOnInsert:{}},
+      {returnDocument:'after'}
+    );
+    if(!claim){ await economy.creditGameResult(user.id,battle.totalCostPerPlayer,{id:battle.id,gameId:'case-battle-join-refund',result:{outcome:'atomic_join_lost'}}); return res.status(409).json({ok:false,error:'battle_already_joined'}); }
+    battle.players=claim.players;
     battle.totalPot=Number((battle.totalCostPerPlayer*2).toFixed(2));
     battle.status='finished';
     const result=resolvePvPCaseBattle(battle);
@@ -279,7 +283,7 @@ export function installGameRoutes(app, economy, options = {}) {
     if(battle.creator.userId!==user.id)return res.status(403).json({ok:false,error:'creator_required'});
     const refund=await economy.creditGameResult(user.id,battle.totalCostPerPlayer,{id:battle.id,gameId:'case-battle-cancel',result:{multiplier:1}});
     if(!refund.ok)return res.status(500).json({ok:false,error:'refund_failed'});
-    battle.status='cancelled';battle.resolvedAt=new Date().toISOString();persistCaseBattles();
+    await (await getMongoDb()).collection('caseBattles').updateOne({id:battle.id,status:'open', 'creator.userId':user.id},{$set:{status:'cancelled',resolvedAt:new Date().toISOString()}}); battle.status='cancelled';battle.resolvedAt=new Date().toISOString();
     res.json({ok:true,balanceDls:refund.balance});
   });
 
