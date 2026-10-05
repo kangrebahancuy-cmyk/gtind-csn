@@ -5,6 +5,14 @@ import crypto from 'crypto';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'economy.json');
 const sessions = new Map();
+const rateBuckets = new Map();
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_BODY_AMOUNT = 100000000;
+function constantTimeEqual(a,b) { const aa=Buffer.from(String(a)); const bb=Buffer.from(String(b)); return aa.length===bb.length && crypto.timingSafeEqual(aa,bb); }
+function rateLimit(key, limit=30, windowMs=60000) { const nowMs=Date.now(); const row=rateBuckets.get(key); if(!row || nowMs-row.start>=windowMs){rateBuckets.set(key,{start:nowMs,count:1});return true;} row.count++; return row.count<=limit; }
+function clientIp(req) { return String(req.headers['x-forwarded-for']||req.socket?.remoteAddress||'unknown').split(',')[0].trim(); }
+function audit(db, actor, action, metadata={}) { db.auditLogs ||= []; db.auditLogs.push({id:id('audit'),actorUserId:actor?.id||null,actorUsername:actor?.username||null,action,metadata,createdAt:now()}); if(db.auditLogs.length>10000) db.auditLogs=db.auditLogs.slice(-10000); }
+function verifyGtpsRequest(req, getGtpsSecret, body={}) { const secret=String(getGtpsSecret?.()||''); const legacy=String(body.secretKey||req.headers['x-gtps-secret']||''); if(secret && legacy && constantTimeEqual(secret,legacy)) return true; const ts=String(req.headers['x-gtps-timestamp']||''); const sig=String(req.headers['x-gtps-signature']||''); const n=Number(ts); if(!secret||!sig||!Number.isFinite(n)||Math.abs(Date.now()-n)>300000) return false; const raw=JSON.stringify(body); const expected=crypto.createHmac('sha256',secret).update(`${ts}.${raw}`).digest('hex'); return constantTimeEqual(expected,sig); }
 
 function now() { return new Date().toISOString(); }
 function id(prefix) { return `${prefix}_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`; }
@@ -92,11 +100,14 @@ export function sessionUser(req) {
   const token = String(req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('gtind_session='));
   const value = token ? decodeURIComponent(token.slice('gtind_session='.length)) : '';
   if (!value) return null;
-  const userId = sessions.get(value);
-  if (!userId) return null;
+  const session = sessions.get(value);
+  if (!session || session.expiresAt < Date.now()) { sessions.delete(value); return null; }
+  const userId = session.userId;
   const db = load();
   return db.users.find(u => u.id === userId) || null;
 }
+function createSession(db,user) { const token=crypto.randomBytes(32).toString('hex'); sessions.set(token,{userId:user.id,expiresAt:Date.now()+SESSION_TTL_MS}); return token; }
+function destroySession(req) { const raw=String(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('gtind_session=')); if(raw) sessions.delete(decodeURIComponent(raw.slice('gtind_session='.length))); }
 function requireAuth(req, res) {
   const user = sessionUser(req);
   if (!user) { res.status(401).json({ ok: false, error: 'not_authenticated' }); return null; }
@@ -164,6 +175,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     const username = String(req.body?.username || '').trim();
     const password = String(req.body?.password || '');
     const growId = String(req.body?.growId || '').trim();
+    if (!rateLimit(`register:${clientIp(req)}`,5,3600000)) return res.status(429).json({ok:false,error:'rate_limited'});
     if (username.length < 4 || username.length > 24) return res.status(400).json({ ok:false, error:'invalid_username' });
     if (password.length < 8 || password.length > 128) return res.status(400).json({ ok:false, error:'invalid_password' });
     const db = load();
@@ -176,8 +188,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     };
     db.users.push(user);
     save(db);
-    const token = crypto.randomBytes(32).toString('hex');
-    sessions.set(token, user.id);
+    const token = createSession(db,user);
     res.setHeader('Set-Cookie', `gtind_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`);
     res.json({ ok:true, user:publicUser(user) });
   });
@@ -185,19 +196,18 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
   app.post('/api/auth/login', (req, res) => {
     const username = String(req.body?.username || '').trim();
     const password = String(req.body?.password || '');
+    if (!rateLimit(`login:${clientIp(req)}`,10,60000)) return res.status(429).json({ok:false,error:'rate_limited'});
     const db = load();
     const user = findUser(db, username);
     if (!user || !verifyPassword(password, user.passwordHash)) return res.status(401).json({ ok:false, error:'invalid_credentials' });
     if (user.isBanned) return res.status(403).json({ ok:false, error:'account_banned' });
-    const token = crypto.randomBytes(32).toString('hex');
-    sessions.set(token, user.id);
+    const token = createSession(db,user);
     res.setHeader('Set-Cookie', `gtind_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`);
     res.json({ ok:true, user:publicUser(user) });
   });
 
   app.post('/api/auth/logout', (req, res) => {
-    const raw = String(req.headers.cookie || '').split(';').map(x=>x.trim()).find(x=>x.startsWith('gtind_session='));
-    if (raw) sessions.delete(decodeURIComponent(raw.slice('gtind_session='.length)));
+    destroySession(req);
     res.setHeader('Set-Cookie', 'gtind_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
     res.json({ ok:true });
   });
@@ -222,7 +232,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
       createTransaction(db,user,'LEGACY_BALANCE_IGNORED',0,0,0,null,{ legacyBalance });
     }
     save(db);
-    const token=crypto.randomBytes(32).toString('hex'); sessions.set(token,user.id);
+    const token=createSession(db,user);
     res.setHeader('Set-Cookie',`gtind_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`);
     res.json({ok:true,user:publicUser(user),legacyBalanceIgnored:legacyBalance});
   });
@@ -338,12 +348,14 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     const growId=String(req.body?.growId || '').trim();
     const currency=String(req.body?.currency || 'DL').toUpperCase();
     const amount=Number(req.body?.amount);
-    if(!transactionId || !growId || !Number.isFinite(amount) || amount<=0) return res.status(400).json({ok:false,error:'invalid_deposit'});
+    if(!verifyGtpsRequest(req,getGtpsSecret,req.body||{})) return res.status(403).json({ok:false,error:'invalid_gtps_signature'});
+    if(!transactionId || !growId || !Number.isFinite(amount) || amount<=0 || amount>MAX_BODY_AMOUNT) return res.status(400).json({ok:false,error:'invalid_deposit'});
     const db=load();
     const existing=db.deposits.find(d=>d.transactionId===transactionId);
     if(existing) return res.json({ok:true,duplicate:true,deposit:existing});
     const user=db.users.find(u=>String(u.growId||'').toLowerCase()===growId.toLowerCase());
     if(!user) return res.status(404).json({ok:false,error:'growid_not_linked'});
+    if(!['DL','WL','BGL'].includes(currency)) return res.status(400).json({ok:false,error:'invalid_currency'});
     const dls=currency==='BGL'?amount*100:currency==='WL'?amount/100:amount;
     if(dls<=0) return res.status(400).json({ok:false,error:'invalid_amount'});
     const ref=transactionId;
