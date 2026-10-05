@@ -248,7 +248,7 @@ export function installGameRoutes(app, economy, options = {}) {
     if(!debit.ok)return res.status(400).json({ok:false,error:debit.error});
     const claim=await (await getMongoDb()).collection('caseBattles').findOneAndUpdate(
       {id:battle.id,status:'open','players.0.userId':{$ne:user.id}},
-      {$set:{status:'finished',updatedAt:Date.now()},$push:{players:{userId:user.id,username:user.username,betDls:battle.totalCostPerPlayer}},$setOnInsert:{}},
+      {$set:{status:'finished',updatedAt:Date.now()},$push:{players:{userId:user.id,username:user.username,betDls:battle.totalCostPerPlayer}}},
       {returnDocument:'after'}
     );
     if(!claim){ await economy.creditGameResult(user.id,battle.totalCostPerPlayer,{id:battle.id,gameId:'case-battle-join-refund',result:{outcome:'atomic_join_lost'}}); return res.status(409).json({ok:false,error:'battle_already_joined'}); }
