@@ -350,7 +350,28 @@ export function installGameRoutes(app, economy, options = {}) {
     const step=Number.isInteger(action.step)?Math.max(0,action.step):0;
     const random=rng(round.serverSeed + ':' + round.clientSeed + ':' + round.nonce + ':' + step);
     if(round.gameId==='blackjack' && action.type==='double' && !round.state?.doubled){ const extra=await economy.debitForGame(user.id,round.betDls,'blackjack-double'); if(!extra.ok)return res.status(400).json({ok:false,error:extra.error}); round.state.doubled=true; round.totalBetDls=round.betDls*2; }
-    const result=round.gameId==='blackjack' ? (action.type==='initial' ? (()=>{const p=round.state.player,d=round.state.dealer;const ps=blackjackScore(p),ds=blackjackScore(d);if(ps===21){round.state.phase='finished';return {outcome:ds===21?'push':'win',player:p,dealer:d,payout:ds===21?round.betDls:round.betDls*2.5,score:ps,dealerScore:ds};}return {outcome:'continue',player:p,dealer:[d[0]],payout:0,score:ps,dealerScore:blackjackScore([d[0]])};})() : resolveBlackjack(round,action) : (round.gameId==='crash' ? resolveCrash(round,action) : (round.gameId==='case-battles' ? resolveCaseBattle(round,random,action) : ((round.gameId==='coinflip' && action.cashout===true) ? resolveCashout(round, action) : resolveGame(round.gameId,random,action,round.betDls,round.state))));
+    let result;
+    if (round.gameId === 'blackjack') {
+      result = action.type === 'initial'
+        ? (() => {
+            const p = round.state.player, d = round.state.dealer;
+            const ps = blackjackScore(p), ds = blackjackScore(d);
+            if (ps === 21) {
+              round.state.phase = 'finished';
+              return { outcome: ds === 21 ? 'push' : 'win', player: p, dealer: d, payout: ds === 21 ? round.betDls : round.betDls * 2.5, score: ps, dealerScore: ds };
+            }
+            return { outcome: 'continue', player: p, dealer: [d[0]], payout: 0, score: ps, dealerScore: blackjackScore([d[0]]) };
+          })()
+        : resolveBlackjack(round, action);
+    } else if (round.gameId === 'crash') {
+      result = resolveCrash(round, action);
+    } else if (round.gameId === 'case-battles') {
+      result = resolveCaseBattle(round, random, action);
+    } else if (round.gameId === 'coinflip' && action.cashout === true) {
+      result = resolveCashout(round, action);
+    } else {
+      result = resolveGame(round.gameId, random, action, round.betDls, round.state);
+    }
     if(result?.error)return res.status(400).json({ok:false,error:result.error});
     round.result=result;
     const payout=Number((result.payout||0).toFixed(2));
