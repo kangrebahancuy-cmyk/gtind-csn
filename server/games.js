@@ -21,24 +21,8 @@ function ensure() {
   if (!fs.existsSync(CASE_FILE)) fs.writeFileSync(CASE_FILE, JSON.stringify([], null, 2));
   if (!fs.existsSync(CASE_BATTLE_FILE)) fs.writeFileSync(CASE_BATTLE_FILE, JSON.stringify([], null, 2));
 }
-function persistCases(){ensure();fs.writeFileSync(CASE_FILE+'.tmp',JSON.stringify([...caseCatalog.values()],null,2));fs.renameSync(CASE_FILE+'.tmp',CASE_FILE);}
-function loadCases(){ensure();try{const rows=JSON.parse(fs.readFileSync(CASE_FILE,'utf8'));if(Array.isArray(rows))rows.forEach(c=>caseCatalog.set(String(c.id),c));}catch{}}
-function persistCaseBattles(){ensure();fs.writeFileSync(CASE_BATTLE_FILE+'.tmp',JSON.stringify([...caseBattles.values()].slice(-2000),null,2));fs.renameSync(CASE_BATTLE_FILE+'.tmp',CASE_BATTLE_FILE);}
-function loadCaseBattles(){ensure();try{const rows=JSON.parse(fs.readFileSync(CASE_BATTLE_FILE,'utf8'));if(Array.isArray(rows))rows.forEach(b=>caseBattles.set(b.id,b));}catch{}}
-loadCases();
-loadCaseBattles();
-function persist() {
-  ensure();
-  fs.writeFileSync(FILE + '.tmp', JSON.stringify([...rounds.values()].slice(-5000), null, 2));
-  fs.renameSync(FILE + '.tmp', FILE);
-}
-function load() {
-  ensure();
-  try {
-    const rows = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-    if (Array.isArray(rows)) rows.forEach(r => rounds.set(r.id, r));
-  } catch {}
-}
+function persistCases() {}
+function load() {}
 load();
 
 function id() { return 'rnd_' + Date.now() + '_' + crypto.randomBytes(6).toString('hex'); }
@@ -80,15 +64,13 @@ export async function installGameRoutes(app, economy, options = {}) {
   const broadcast = typeof options.broadcast === 'function' ? options.broadcast : () => {};
   const instanceId = crypto.randomUUID();
   const persistCrash = () => {
-    ensure();
-    const safe={...crashGlobal,players:[...crashGlobal.players.values()]};
-    fs.writeFileSync(CRASH_FILE+'.tmp',JSON.stringify(safe,null,2));
-    fs.renameSync(CRASH_FILE+'.tmp',CRASH_FILE);
     void (async()=>{try{
       const db=await getMongoDb();
-      await db.collection('crashRounds').replaceOne({id:crashGlobal.roundId},{id:crashGlobal.roundId,phase:crashGlobal.phase,countdown:crashGlobal.countdown,multiplier:crashGlobal.multiplier,crashPoint:crashGlobal.crashPoint,serverSeed:crashGlobal.serverSeed,serverSeedHash:crashGlobal.serverSeedHash,startedAt:crashGlobal.startedAt,bettingStartedAt:crashGlobal.bettingStartedAt,history:crashGlobal.history,nextRoundAt:crashGlobal.nextRoundAt,updatedAt:Date.now()},{upsert:true});
-      const players=db.collection('crashPlayers');
-      for(const p of crashGlobal.players.values()) await players.replaceOne({roundId:p.roundId,userId:p.userId},{...p,roundId:p.roundId,updatedAt:Date.now()},{upsert:true});
+      await db.collection('crashRounds').replaceOne(
+        {id:crashGlobal.roundId},
+        {id:crashGlobal.roundId,phase:crashGlobal.phase,countdown:crashGlobal.countdown,multiplier:crashGlobal.multiplier,crashPoint:crashGlobal.crashPoint,serverSeed:crashGlobal.serverSeed,serverSeedHash:crashGlobal.serverSeedHash,startedAt:crashGlobal.startedAt,bettingStartedAt:crashGlobal.bettingStartedAt,history:crashGlobal.history,nextRoundAt:crashGlobal.nextRoundAt,updatedAt:Date.now()},
+        {upsert:true}
+      );
     }catch{} })();
   };
   const loadCrash = async () => {
@@ -303,7 +285,7 @@ export async function installGameRoutes(app, economy, options = {}) {
 
   app.post('/api/games/case-battles/cancel', async (req,res) => {
     const user=await requireUser(req,res);if(!user)return;
-    const battle=caseBattles.get(String(req.body?.battleId||''));
+    const battle=await mongoGetState('caseBattles',String(req.body?.battleId||''));
     if(!battle)return res.status(404).json({ok:false,error:'battle_not_found'});
     if(battle.status!=='open')return res.status(409).json({ok:false,error:'battle_not_open'});
     if(battle.creator.userId!==user.id)return res.status(403).json({ok:false,error:'creator_required'});
