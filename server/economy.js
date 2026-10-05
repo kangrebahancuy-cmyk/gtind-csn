@@ -149,7 +149,7 @@ async function requireAdmin(req, res) {
   return user;
 }
 
-export export async function linkGrowIdByCode(code, growId) {
+export async function linkGrowIdByCode(code, growId) {
   const cleanCode = String(code || '').trim();
   const cleanGrowId = String(growId || '').trim();
   if (!cleanCode || !cleanGrowId) return null;
@@ -162,7 +162,7 @@ export export async function linkGrowIdByCode(code, growId) {
   return publicUser(user);
 }
 
-export export async function unlinkGrowId(growId) {
+export async function unlinkGrowId(growId) {
   const clean = String(growId || '').trim().toLowerCase();
   if (!clean) return null;
   const db = await load();
