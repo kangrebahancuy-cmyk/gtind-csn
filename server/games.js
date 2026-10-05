@@ -87,6 +87,7 @@ export function installGameRoutes(app, economy) {
     const round={id:id(),userId:user.id,username:user.username,gameId,betDls,status:'ACTIVE',
       serverSeed,serverSeedHash:commitment,clientSeed,nonce,createdAt:new Date().toISOString(),balanceAfterBet:result.balance};
     if (gameId==='blackjack') { const initial=startBlackjack(round); round.initialResult=initial; }
+    if (gameId==='cases') { const c=caseCatalog.get(String(req.body?.caseId||'')); const count=Math.max(1,Math.min(4,Number(req.body?.count)||1)); if(!c)return res.status(400).json({ok:false,error:'case_not_found'}); const total=c.price*count; if(Math.abs(total-betDls)>0.01)return res.status(400).json({ok:false,error:'case_price_mismatch'}); round.state={caseId:c.id,count}; }
     if (gameId==='mines') {
       const size=Math.max(2,Math.min(8,Number(req.body?.gridSize)||5)); const total=size*size; const mineCount=Math.max(1,Math.min(total-1,Number(req.body?.mines)||3));
       const rr=rng(serverSeed+':mines'); const mineSet=new Set(); while(mineSet.size<mineCount) mineSet.add(Math.floor(rr()*total));
@@ -218,7 +219,11 @@ function resolveGame(gameId,r,action,bet,state) {
       return {roll,target,condition:over?'over':'under',outcome:win?'win':'loss',multiplier:win?m:0,payout:win?bet*m:0};
     }
     case 'cases': {
-      return {outcome:'unsupported',payout:0,error:'case_catalog_must_be_server_owned'};
+      const c=caseCatalog.get(String(state?.caseId||'')); if(!c)return {outcome:'invalid',payout:0,error:'case_not_found'};
+      const count=Math.max(1,Math.min(4,Number(state.count)||1)); const winners=[];
+      for(let n=0;n<count;n++){let x=r()*100,w=c.items[c.items.length-1];for(const item of c.items){x-=Math.max(0,Number(item.chance)||0);if(x<=0){w=item;break;}}winners.push(w);}
+      const payout=winners.reduce((sum,w)=>sum+Math.max(0,Number(w.price)||0),0);
+      return {outcome:'win',winners,payout,multiplier:bet?payout/bet:0};
     }
     default: {
       const win=r()>=0.5; return {outcome:win?'win':'loss',multiplier:win?1.9:0,payout:win?bet*1.9:0};
