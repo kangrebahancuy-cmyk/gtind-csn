@@ -3,7 +3,7 @@ import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { installEconomyRoutes } from './server/economy.js';
+import { installEconomyRoutes, unlinkGrowId } from './server/economy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -144,38 +144,25 @@ app.post('/api/gtps/unlink', (req, res) => {
 // Validasi: kode link harus terdaftar (kode di-re-register tiap wallet dibuka),
 // jadi unlink tetap jalan meski cache link di memori hilang setelah restart.
 app.post('/api/gtps/unlink-web', async (req, res) => {
-  const { code, growId } = req.body;
-  const cleanCode = String(code || '').trim();
-  const cleanGrowId = String(growId || '').trim();
-  if (!cleanGrowId || !cleanCode) {
-    return res.status(400).json({ ok: false, error: 'code dan growId wajib' });
-  }
+  const cleanGrowId = String(req.body?.growId || '').trim();
+  if (!cleanGrowId) return res.status(400).json({ ok:false, error:'growId wajib' });
+  const result = unlinkGrowId(cleanGrowId);
+  if (!result) return res.status(404).json({ ok:false, error:'growid_not_found' });
 
-  if (!registeredLinkCodes.has(cleanCode)) {
-    return res.status(403).json({ ok: false, error: 'kode_link_tidak_dikenal' });
-  }
-
-  const linked = linkedGrowIds.get(cleanCode);
-  if (!linked || String(linked).toLowerCase() === cleanGrowId.toLowerCase()) {
-    linkedGrowIds.delete(cleanCode);
-  }
-
-  // Lepaskan juga link di sisi game (bridge Lua)
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
     await fetch(`${GTPS_BRIDGE_URL}/supreme/unlink`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ secretKey: gtpsConfig.secretKey, growId: cleanGrowId }),
-      signal: controller.signal,
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ secretKey:gtpsConfig.secretKey, growId:cleanGrowId }),
+      signal:controller.signal,
     });
     clearTimeout(timeoutId);
   } catch {}
 
-  broadcast({ type: 'GTPS_UNLINK', payload: { growId: cleanGrowId, timestamp: Date.now() } });
-  console.log(`[GTPS Unlink] ${cleanGrowId} unlinked from website (code ${cleanCode})`);
-  res.json({ ok: true, growId: cleanGrowId });
+  broadcast({ type:'GTPS_UNLINK', payload:{ growId:cleanGrowId, timestamp:Date.now() } });
+  res.json({ ok:true, growId:cleanGrowId, user:result });
 });
 
 // Real-Time WebSocket Server
