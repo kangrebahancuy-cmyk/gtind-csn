@@ -335,7 +335,7 @@ export const CasesGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [itemPickerSearch, setItemPickerSearch] = useState<string>('');
   const [itemSortOrder, setItemSortOrder] = useState<'asc' | 'desc'>('asc');
 
-  const isCurrentAdmin = isAdmin || user.username.toLowerCase() === 'admin99';
+  const isCurrentAdmin = isAdmin;
 
   // Automatically calculate price from newCaseItems
   const calculatedNewCasePrice = useMemo(() => {
@@ -541,7 +541,7 @@ export const CasesGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   // Admin: Open Creator Modal
   const handleOpenAdminCreate = (caseToEdit?: CustomCase) => {
     if (!isCurrentAdmin) {
-      showToast('Admin access required. Log in with username admin99 / password admin001', 'error', 'Admin Only');
+      showToast('Admin access required.', 'error', 'Admin Only');
       return;
     }
 
