@@ -4,7 +4,8 @@ import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { installEconomyRoutes, sessionUser, debitForGame, creditGameResult } from './server/economy.js';
+import { installEconomyRoutes, sessionUser } from './server/economy.js';
+import { installWalletRoutes, debitForGame, creditGameResult } from './server/wallet.js';
 import { ensureMongoSchema, pingMongo, closeMongo } from './server/mongo-store.js';
 import { installGameRoutes } from './server/games.js';
 import { installProgressionRoutes } from './server/progression.js';
@@ -78,6 +79,13 @@ app.get('/api/gtps/status', (req, res) => {
 });
 
 installProgressionRoutes(app, { sessionUser });
+
+installWalletRoutes(app, {
+  sessionUser,
+  getGtpsSecret: () => gtpsConfig.secretKey,
+  gtpsBridgeUrl: GTPS_BRIDGE_URL,
+  broadcast,
+});
 
 installEconomyRoutes(app, {
   gtpsBridgeUrl: GTPS_BRIDGE_URL,

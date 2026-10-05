@@ -39,6 +39,15 @@ export const WalletModal: React.FC = () => {
 
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [confirmUnlink, setConfirmUnlink] = useState(false);
+  const [walletBalances, setWalletBalances] = useState<{WL:number;DL:number;BGL:number}>({WL:0,DL:0,BGL:0});
+
+  useEffect(() => {
+    if (!walletModalOpen || !user.isAuthenticated) return;
+    fetch('/api/economy/wallet', { credentials: 'include' })
+      .then((r) => r.json())
+      .then((data) => { if (data?.wallet?.balances) setWalletBalances(data.wallet.balances); })
+      .catch(() => {});
+  }, [walletModalOpen, user.isAuthenticated]);
 
   // Withdraw state
   const [withdrawAmount, setWithdrawAmount] = useState<string>('10');
@@ -156,6 +165,18 @@ export const WalletModal: React.FC = () => {
           >
             <X className="w-5 h-5" />
           </button>
+        </div>
+
+        {/* Server-authoritative multi-currency balances */}
+        <div className="grid grid-cols-3 gap-2 px-3 py-3 bg-[#0a101b] border-b border-[#182335]">
+          {(['WL','DL','BGL'] as const).map((code) => (
+            <div key={code} className="rounded-xl border border-[#1b2b44] bg-[#0e1725] px-3 py-2">
+              <div className="text-[9px] font-black tracking-widest text-slate-500">{code}</div>
+              <div className="mt-1 text-sm font-black text-white font-mono">
+                {walletBalances[code].toLocaleString(undefined, { maximumFractionDigits: code === 'WL' ? 0 : 2 })}
+              </div>
+            </div>
+          ))}
         </div>
 
         {/* 4 Tabs: Deposit, Withdraw, Link Account, Tip */}

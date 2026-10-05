@@ -17,8 +17,8 @@ export async function pingMongo(){ await (await getMongoDb()).command({ping:1});
 const INDEXES={
 users:[[{usernameNormalized:1},{unique:true,name:'uniq_username_normalized'}],[{linkCode:1},{unique:true,name:'uniq_link_code'}],[{growIdNormalized:1},{unique:true,sparse:true,name:'uniq_growid_normalized'}]],
 sessions:[[{token:1},{unique:true,name:'uniq_session_token'}],[{expiresAt:1},{expireAfterSeconds:0,name:'ttl_sessions'}]],
-wallets:[[{userId:1},{unique:true,name:'uniq_wallet_user'}]],
-ledger:[[{id:1},{unique:true,name:'uniq_ledger_id'}],[{userId:1,createdAt:-1},{name:'idx_ledger_user_created'}],[{userId:1,type:1,referenceId:1},{unique:true,name:'uniq_ledger_reference_v2',partialFilterExpression:{referenceId:{$type:'string'}}}]],
+wallets:[[{userId:1},{unique:true,name:'uniq_wallet_user'}],[{'balancesWl.DL':-1},{name:'idx_wallet_dl'}]],
+ledger:[[{id:1},{unique:true,name:'uniq_ledger_id'}],[{userId:1,currency:1,createdAt:-1},{name:'idx_ledger_user_currency_created'}],[{userId:1,type:1,referenceId:1},{unique:true,name:'uniq_ledger_reference_v2',partialFilterExpression:{referenceId:{$type:'string'}}}]],
 deposits:[[{transactionId:1},{unique:true,name:'uniq_deposit_transaction'}],[{userId:1,createdAt:-1},{name:'idx_deposit_user_created'}]],
 withdrawals:[[{id:1},{unique:true,name:'uniq_withdrawal_id'}],[{userId:1,idempotencyKey:1},{unique:true,name:'uniq_withdrawal_idempotency_v2',partialFilterExpression:{idempotencyKey:{$type:'string'}}}],[{status:1,createdAt:1},{name:'idx_withdrawal_status_created'}]],
 gameRounds:[[{id:1},{unique:true,name:'uniq_game_round_id'}],[{userId:1,createdAt:-1},{name:'idx_game_round_user_created'}]],
@@ -39,7 +39,7 @@ export async function ensureMongoSchema(){
  const db=await getMongoDb();
  for(const [name,oldIndex] of [['ledger','uniq_ledger_reference'],['withdrawals','uniq_withdrawal_idempotency']]) { try { await db.collection(name).dropIndex(oldIndex); } catch {} }
  for(const [name,indexes] of Object.entries(INDEXES)) for(const [key,options] of indexes) await db.collection(name).createIndex(key,options);
- await db.collection('meta').updateOne({_id:'schema'},{$set:{version:4,updatedAt:new Date()}},{upsert:true});
+ await db.collection('meta').updateOne({_id:'schema'},{$set:{version:5,updatedAt:new Date()}},{upsert:true});
  return db;
 }
 export async function withMongoTransaction(work){
