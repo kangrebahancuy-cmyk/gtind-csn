@@ -761,7 +761,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await fetch('/api/gtps/withdraw-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ growId: growId.trim(), currency: 'DL', amount: amt }),
+        body: JSON.stringify({ growId: growId.trim(), currency: activeCurrency === 'BGLS' ? 'BGL' : 'DL', amount: toActiveAmount(dlsAmount) }),
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid_response' }));
       if (!data.ok) {
@@ -794,7 +794,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (dlsAmount <= 0) return { success:false, message:'Please enter a valid tip amount.' };
     try {
       const { response, data } = await apiJson('/api/economy/tip', {
-        method:'POST', body:JSON.stringify({ amountDls:dlsAmount, targetUser:targetUser.trim(), message:message || '' })
+        method:'POST', body:JSON.stringify({ currency: activeCurrency === 'BGLS' ? 'BGL' : 'DL', amount: toActiveAmount(dlsAmount), targetUser:targetUser.trim(), message:message || '' })
       });
       if (!response.ok) {
         const messages: Record<string,string> = { insufficient_balance:'Insufficient balance to tip.', recipient_not_found:'Recipient account does not exist.', self_tip:'You cannot tip yourself.' };
