@@ -3,6 +3,7 @@ import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
+import { installEconomyRoutes } from './server/economy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,8 +35,8 @@ const liveChatHistory = [];
 const liveBetsHistory = [];
 const activeBattles = [];
 
-let gtpsConfig = {
-  secretKey: 'supreme_gtps_secret_auth_token_25741',
+const gtpsConfig = {
+  secretKey: process.env.GTPS_WEBHOOK_SECRET || '',
   status: 'online',
   activeSyncCount: 0,
 };
@@ -53,37 +54,9 @@ app.get('/api/gtps/status', (req, res) => {
   });
 });
 
-app.post('/api/gtps/deposit-webhook', (req, res) => {
-  const { growId, currency, amount, secretKey } = req.body;
-  if (secretKey !== gtpsConfig.secretKey) {
-    return res.status(403).json({ error: 'Invalid secret key' });
-  }
-  console.log(`[GTPS Deposit] Received ${amount} ${currency} from ${growId}`);
-  gtpsConfig.activeSyncCount++;
-
-  // Broadcast deposit notification to all connected clients
-  broadcast({
-    type: 'GTPS_DEPOSIT',
-    payload: {
-      growId: growId || 'Unknown',
-      currency: currency || 'BGL',
-      amount: Number(amount) || 0,
-      timestamp: Date.now(),
-    },
-  });
-
-  res.json({ success: true, growId, currency, amount });
-});
-
-app.post('/api/gtps/withdraw-webhook', (req, res) => {
-  const { growId, currency, amount, secretKey } = req.body;
-  if (secretKey !== gtpsConfig.secretKey) {
-    return res.status(403).json({ error: 'Invalid secret key' });
-  }
-  console.log(`[GTPS Withdraw] Requested ${amount} ${currency} for ${growId}`);
-  gtpsConfig.activeSyncCount++;
-
-  res.json({ success: true, growId, currency, amount, status: 'dispatched' });
+installEconomyRoutes(app, {
+  gtpsBridgeUrl: GTPS_BRIDGE_URL,
+  getGtpsSecret: () => gtpsConfig.secretKey,
 });
 
 // In-memory registered link codes from website accounts (code -> { username, code, growId, timestamp })
@@ -145,42 +118,6 @@ app.post('/api/gtps/link-growid', (req, res) => {
 
 app.get('/api/gtps/balance/:growid', (req, res) => {
   res.json({ success: true, growId: req.params.growid, status: 'active' });
-});
-
-// Withdraw dari web -> bridge Lua -> item langsung masuk backpack in-game.
-// Bridge memvalidasi secretKey + saldo ledger di sisi game (anti double-spend).
-app.post('/api/gtps/withdraw-request', async (req, res) => {
-  const { growId, currency = 'DL', amount } = req.body;
-  const cleanGrowId = String(growId || '').trim();
-  const amt = Number(amount) || 0;
-
-  if (!cleanGrowId || amt <= 0 || !Number.isInteger(amt)) {
-    return res.status(400).json({ ok: false, error: 'growId dan amount (bilangan bulat) wajib diisi' });
-  }
-
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    const bridgeRes = await fetch(`${GTPS_BRIDGE_URL}/supreme/withdraw`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        secretKey: gtpsConfig.secretKey,
-        growId: cleanGrowId,
-        currency: String(currency).toUpperCase(),
-        amount: amt,
-      }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-
-    const data = await bridgeRes.json().catch(() => ({ ok: false, error: 'bridge_invalid_response' }));
-    console.log(`[GTPS Bridge] withdraw ${amt} ${String(currency).toUpperCase()} -> ${cleanGrowId}: ${bridgeRes.status} ${JSON.stringify(data)}`);
-    return res.status(bridgeRes.status).json(data);
-  } catch (err) {
-    console.error('[GTPS Bridge] unreachable:', err.message);
-    return res.status(502).json({ ok: false, error: 'bridge_unreachable' });
-  }
 });
 
 // Player /unlink di game -> lepas link di sisi web juga
