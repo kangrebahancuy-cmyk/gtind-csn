@@ -5,6 +5,7 @@ import path from 'path';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const FILE = path.join(DATA_DIR, 'game-rounds.json');
 const rounds = new Map();
+const SERVER_AUTH_GAMES = new Set(['coinflip','mines','towers','roulette','keno','dice']);
 
 function ensure() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -55,6 +56,7 @@ export function installGameRoutes(app, economy) {
     const user=requireUser(req,res); if(!user)return;
     const gameId=String(req.body?.gameId||'').trim().toLowerCase();
     const betDls=Number(req.body?.betDls);
+    if (!SERVER_AUTH_GAMES.has(gameId)) return res.status(409).json({ok:false,error:'game_not_server_authoritative'});
     if (!gameId || !Number.isFinite(betDls) || betDls<=0 || betDls>100000000) return res.status(400).json({ok:false,error:'invalid_bet'});
     const result=economy.debitForGame(user.id,betDls,gameId);
     if (!result.ok) return res.status(400).json({ok:false,error:result.error});
