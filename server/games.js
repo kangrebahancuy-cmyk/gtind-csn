@@ -87,6 +87,7 @@ export function installGameRoutes(app, economy) {
     const action=req.body?.action && typeof req.body.action==='object' ? req.body.action : {};
     const step=Number.isInteger(action.step)?Math.max(0,action.step):0;
     const random=rng(round.serverSeed + ':' + round.clientSeed + ':' + round.nonce + ':' + step);
+    if(round.gameId==='blackjack' && action.type==='double' && !round.state?.doubled){ const extra=economy.debitForGame(user.id,round.betDls,'blackjack-double'); if(!extra.ok)return res.status(400).json({ok:false,error:extra.error}); round.state.doubled=true; round.totalBetDls=round.betDls*2; }
     const result=round.gameId==='blackjack' ? resolveBlackjack(round,action) : ((round.gameId==='coinflip' && action.cashout===true) ? resolveCashout(round, action) : resolveGame(round.gameId,random,action,round.betDls,round.state));
     const payout=Number((result.payout||0).toFixed(2));
     if (payout < 0 || payout > round.betDls * 100000) return res.status(400).json({ok:false,error:'invalid_payout'});
@@ -121,8 +122,8 @@ function resolveBlackjack(round,action){
     return {outcome:'continue',player:st.player,dealer:[st.dealer[0]],payout:0,score,dealerScore:blackjackScore([st.dealer[0]])};
   }
   if(action.type==='double'){
-    if(st.phase!=='player'||st.player.length!==2||!Number.isFinite(st.bet*2))return {error:'invalid_action',payout:0};
-    const extra=round.betDls;if(!economySafeDebit){} st.bet*=2; st.player.push(st.deck.pop()); const score=blackjackScore(st.player); st.phase='dealer'; if(score>21){st.phase='finished';return {outcome:'loss',player:st.player,dealer:st.dealer,payout:0,score};}
+    if(st.phase!=='player'||st.player.length!==2||!round.state?.doubled)return {error:'invalid_action',payout:0};
+    st.bet*=2; st.player.push(st.deck.pop()); const score=blackjackScore(st.player); st.phase='dealer'; if(score>21){st.phase='finished';return {outcome:'loss',player:st.player,dealer:st.dealer,payout:0,score};}
   } else if(action.type==='stand'){if(st.phase!=='player')return {error:'invalid_action',payout:0};st.phase='dealer';} else return {error:'invalid_action',payout:0};
   while(blackjackScore(st.dealer)<17&&st.deck.length)st.dealer.push(st.deck.pop());
   st.phase='finished'; const ps=blackjackScore(st.player),ds=blackjackScore(st.dealer); let payout=0,outcome='loss';
