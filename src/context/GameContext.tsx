@@ -91,8 +91,8 @@ interface GameContextType {
   hideToast: () => void;
 
   // Real Auth
-  login: (username: string, pass: string) => { success: boolean; message: string };
-  register: (username: string, pass: string, growId?: string) => { success: boolean; message: string };
+  login: (username: string, pass: string) => Promise<{ success: boolean; message: string }>;
+  register: (username: string, pass: string, growId?: string) => Promise<{ success: boolean; message: string }>;
   logout: () => void;
   authModalOpen: boolean;
   setAuthModalOpen: (open: boolean) => void;
@@ -102,7 +102,7 @@ interface GameContextType {
   // Wallet
   deposit: (dlsAmount: number) => void;
   withdraw: (dlsAmount: number, growId: string, world: string) => Promise<{ success: boolean; message: string }>;
-  tip: (dlsAmount: number, targetUser: string, message?: string) => { success: boolean; message: string };
+  tip: (dlsAmount: number, targetUser: string, message?: string) => Promise<{ success: boolean; message: string }>;
   updateUserGrowId: (growId: string) => void;
   unlinkGtps: () => Promise<{ success: boolean; message: string }>;
 
@@ -944,20 +944,23 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 showToast('Link GTPS diputus dari sisi game.', 'info', 'GTPS Unlinked');
               }
             } else if (data.type === 'GTPS_DEPOSIT' && data.payload) {
-              // Deposit in-game -> saldo web bertambah otomatis (real, bukan simulasi)
               const p = data.payload;
               const cu = currentUserRef.current;
               const myGrow = String(cu?.growId || '').toLowerCase();
               if (cu && myGrow && String(p.growId || '').toLowerCase() === myGrow) {
-                const cur = String(p.currency || 'DL').toUpperCase();
-                const dls = cur === 'BGL' ? Number(p.amount) * 100 : cur === 'WL' ? Number(p.amount) / 100 : Number(p.amount);
-                if (dls > 0) {
-                  updateCurrentUserBalance(cu.balanceDls + dls);
-                  triggerBalanceGain(dls);
-                  showToast(`Deposit in-game diterima: +${dls} DLS!`, 'success', 'GTPS Deposit');
-                }
+                try {
+                  const walletRes = await apiJson('/api/economy/wallet');
+                  if (walletRes.data?.user) {
+                    setCurrentUser(walletRes.data.user);
+                    currentUserRef.current = walletRes.data.user;
+                    setAccounts(prev => prev.map(a => a.username.toLowerCase() === walletRes.data.user.username.toLowerCase() ? walletRes.data.user : a));
+                    const cur = String(p.currency || 'DL').toUpperCase();
+                    const dls = cur === 'BGL' ? Number(p.amount) * 100 : cur === 'WL' ? Number(p.amount) / 100 : Number(p.amount);
+                    if (dls > 0) triggerBalanceGain(dls);
+                    showToast(`Deposit in-game diterima: +${toActiveAmount(dls)} ${currencyLabel}!`, 'success', 'GTPS Deposit');
+                  }
+                } catch {}
               }
-            }
           } catch {}
         };
 
