@@ -3,7 +3,8 @@ import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { installEconomyRoutes } from './server/economy.js';
+import { installEconomyRoutes, sessionUser, debitForGame, creditGameResult } from './server/economy.js';
+import { installGameRoutes } from './server/games.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,6 +60,8 @@ installEconomyRoutes(app, {
   getGtpsSecret: () => gtpsConfig.secretKey,
   broadcast,
 });
+
+installGameRoutes(app, { sessionUser, debitForGame, creditGameResult });
 
 // In-memory registered link codes from website accounts (code -> { username, code, growId, timestamp })
 const registeredLinkCodes = new Map();
