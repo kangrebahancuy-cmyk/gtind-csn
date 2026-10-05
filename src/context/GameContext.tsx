@@ -859,7 +859,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let reconnectTimeout: any = null;
 
     const connect = () => {
-      try {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws`;
         ws = new WebSocket(wsUrl);
@@ -944,7 +943,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         ws.onerror = () => {
           ws?.close();
         };
-      } catch {}
     };
 
     connect();
