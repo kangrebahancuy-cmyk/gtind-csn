@@ -355,7 +355,6 @@ export const CaseBattlesGame: React.FC<{ onBack: () => void }> = ({ onBack }) =>
   // Cancel an open battle created by the user
   const handleCancelBattle = (battle: BattleInstance) => {
     sound.playClick();
-    awardPayout(battle.totalCostPerPlayer, 'Cancelled Case Battle', 1, battle.totalCostPerPlayer);
     setBattles((prev) => {
       const updated = prev.filter((b) => b.id !== battle.id);
       try {
