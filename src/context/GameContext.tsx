@@ -76,10 +76,10 @@ interface GameContextType {
   gtpsPort: number;
   setGtpsPort: (port: number) => void;
   accounts: StoredAccount[];
-  adminAddBalance: (username: string, amountDls: number) => boolean;
-  adminRemoveBalance: (username: string, amountDls: number) => boolean;
-  adminToggleBan: (username: string) => boolean;
-  adminToggleMute: (username: string) => boolean;
+  adminAddBalance: (username: string, amountDls: number) => Promise<boolean>;
+  adminRemoveBalance: (username: string, amountDls: number) => Promise<boolean>;
+  adminToggleBan: (username: string) => Promise<boolean>;
+  adminToggleMute: (username: string) => Promise<boolean>;
 
   // Floating Balance Gain Animation (+10.00 DLS)
   balanceGainAnim: { id: number; amount: string; icon: string; currency: string } | null;
