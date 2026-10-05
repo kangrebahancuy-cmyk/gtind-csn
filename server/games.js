@@ -9,6 +9,7 @@ const caseCatalog = new Map();
 const caseBattles = new Map();
 const CASE_FILE = path.join(DATA_DIR, 'cases.json');
 const CASE_BATTLE_FILE = path.join(DATA_DIR, 'case-battles.json');
+const crashGlobal = { roundId:null, phase:'betting', countdown:5, multiplier:1, crashPoint:1, startedAt:0, bettingStartedAt:Date.now(), history:[], players:new Map() };
 const SERVER_AUTH_GAMES = new Set(['coinflip','mines','towers','roulette','keno','dice','blackjack','cases','case-battles','crash']);
 const TOWERS_CONFIGS = { Easy:{columns:4,traps:1,multipliers:[1.28,1.65,2.15,2.8,3.65,4.8,6.3,8.3]}, Medium:{columns:3,traps:1,multipliers:[1.45,2.15,3.2,4.75,7.05,10.5,15.6,23.2]}, Hard:{columns:2,traps:1,multipliers:[1.95,3.85,7.6,15,29.5,58,114,225]}, Extreme:{columns:3,traps:2,multipliers:[2.9,8.5,25,74,218,645,1900,5600]} };
 const KENO_PAYTABLES = { Classic:{1:{0:0,1:3.8},2:{0:0,1:1.7,2:5.2},3:{0:0,1:1,2:2.7,3:26},4:{0:0,1:0,2:1.8,3:8,4:80},5:{0:0,1:0,2:1.4,3:4,4:25,5:300},6:{0:0,1:0,2:0,3:3,4:12,5:90,6:800},7:{0:0,1:0,2:0,3:1.8,4:6,5:30,6:250,7:2000},8:{0:0,1:0,2:0,3:0,4:4,5:18,6:100,7:600,8:3000},9:{0:0,1:0,2:0,3:0,4:2.5,5:10,6:45,7:250,8:1200,9:4500},10:{0:0,1:0,2:0,3:0,4:1.6,5:4.5,6:18,7:80,8:400,9:2000,10:7500}}, Low:{1:{0:0,1:1.95},2:{0:0,1:1.95,2:3.9},3:{0:0,1:1.1,2:2.2,3:13.5},4:{0:0,1:.5,2:1.6,3:4.2,4:24.5},5:{0:0,1:.5,2:1.2,3:2.5,4:12,5:120},6:{0:0,1:0,2:1,3:2,4:6,5:30,6:350},7:{0:0,1:0,2:.8,3:1.5,4:3.5,5:14,6:90,7:700},8:{0:0,1:0,2:.5,3:1.2,4:2.5,5:8,6:45,7:250,8:1200},9:{0:0,1:0,2:0,3:1,4:2,5:5,6:22,7:100,8:500,9:2500},10:{0:0,1:0,2:0,3:.8,4:1.5,5:3.5,6:12,7:45,8:200,9:1000,10:4000}}, Medium:{1:{0:0,1:3.8},2:{0:0,1:1.75,2:4.95},3:{0:0,1:1,2:2.8,3:28},4:{0:0,1:0,2:1.75,3:8.5,4:85},5:{0:0,1:0,2:1.4,3:4,4:27,5:350},6:{0:0,1:0,2:0,3:3,4:12.5,5:95,6:900},7:{0:0,1:0,2:0,3:1.8,4:6.5,5:32,6:275,7:2200},8:{0:0,1:0,2:0,3:0,4:4.2,5:19,6:110,7:650,8:3500},9:{0:0,1:0,2:0,3:0,4:2.5,5:11,6:48,7:280,8:1350,9:5000},10:{0:0,1:0,2:0,3:0,4:1.7,5:4.8,6:19.5,7:85,8:450,9:2200,10:8500}}, High:{1:{0:0,1:3.96},2:{0:0,1:0,2:9.9},3:{0:0,1:0,2:3.5,3:52},4:{0:0,1:0,2:2,3:14,4:170},5:{0:0,1:0,2:0,3:5.5,4:55,5:750},6:{0:0,1:0,2:0,3:0,4:20,5:180,6:2000},7:{0:0,1:0,2:0,3:0,4:9,5:65,6:600,7:5000},8:{0:0,1:0,2:0,3:0,4:0,5:35,6:250,7:1500,8:9000},9:{0:0,1:0,2:0,3:0,4:0,5:18,6:100,7:650,8:3200,9:15000},10:{0:0,1:0,2:0,3:0,4:0,5:8.5,6:40,7:200,8:1100,9:5500,10:25000}} };
@@ -53,7 +54,92 @@ function requireUser(req, res) {
   return user;
 }
 
-export function installGameRoutes(app, economy) {
+export function installGameRoutes(app, economy, options = {}) {
+  const broadcast = typeof options.broadcast === 'function' ? options.broadcast : () => {};
+  const startCrashRound = () => {
+    crashGlobal.roundId='crash_'+Date.now()+'_'+crypto.randomBytes(5).toString('hex');
+    crashGlobal.phase='betting'; crashGlobal.countdown=5; crashGlobal.multiplier=1; crashGlobal.startedAt=0;
+    crashGlobal.bettingStartedAt=Date.now(); crashGlobal.crashPoint=generateCrashPoint(); crashGlobal.players=new Map();
+    broadcast({type:'CRASH_STATE',payload:publicCrashState()});
+  };
+  const crashTick = () => {
+    const now=Date.now();
+    if(crashGlobal.phase==='betting'){
+      const remaining=Math.max(0,5-(now-crashGlobal.bettingStartedAt)/1000);
+      crashGlobal.countdown=Number(remaining.toFixed(1));
+      if(remaining<=0){crashGlobal.phase='flying';crashGlobal.startedAt=now;crashGlobal.multiplier=1;}
+    } else if(crashGlobal.phase==='flying'){
+      crashGlobal.multiplier=Number(Math.max(1,Math.exp(0.065*((now-crashGlobal.startedAt)/1000)*1.5)).toFixed(2));
+      for(const p of crashGlobal.players.values()){
+        if(p.status==='active' && p.autoCashout>1.01 && crashGlobal.multiplier>=p.autoCashout) settleCrashPlayer(p,true);
+      }
+      if(crashGlobal.multiplier>=crashGlobal.crashPoint){
+        crashGlobal.multiplier=crashGlobal.crashPoint; crashGlobal.phase='crashed';
+        crashGlobal.history=[crashGlobal.crashPoint,...crashGlobal.history].slice(0,20);
+        for(const p of crashGlobal.players.values()) if(p.status==='active') p.status='busted';
+        broadcast({type:'CRASH_CRASHED',payload:{roundId:crashGlobal.roundId,crashPoint:crashGlobal.crashPoint}});
+        setTimeout(startCrashRound,3500);
+      }
+    }
+    broadcast({type:'CRASH_STATE',payload:publicCrashState()});
+  };
+  const timer=setInterval(crashTick,100);
+  if(typeof timer.unref==='function')timer.unref();
+  startCrashRound();
+  function generateCrashPoint(){
+    const u=crypto.randomBytes(4).readUInt32BE(0)/0x100000000;
+    return Math.max(1,Number((0.99/(1-u)).toFixed(2)));
+  }
+  function publicCrashState(){
+    return {roundId:crashGlobal.roundId,phase:crashGlobal.phase,countdown:crashGlobal.countdown,currentMultiplier:crashGlobal.multiplier,crashPoint:crashGlobal.phase==='crashed'?crashGlobal.crashPoint:null,history:crashGlobal.history,players:[...crashGlobal.players.values()].map(p=>({username:p.username,status:p.status,amountDls:p.amountDls,autoCashout:p.autoCashout}))};
+  }
+  function settleCrashPlayer(p,auto=false){
+    if(p.status!=='active')return null;
+    const multiplier=auto?Math.max(1,crashGlobal.multiplier):Math.max(1,crashGlobal.multiplier);
+    const result=economy.creditGameResult(p.userId,p.amountDls*multiplier,{id:p.roundId,gameId:'crash-global',result:{outcome:'win',current:multiplier,multiplier}});
+    if(!result.ok)return null;
+    p.status='cashed';p.cashedAt=multiplier;p.payoutDls=Number((p.amountDls*multiplier).toFixed(2));
+    return result;
+  }
+
+  app.get('/api/crash/state',(req,res)=>{
+    const user=economy.sessionUser(req);
+    const own=user?[...crashGlobal.players.values()].find(p=>p.userId===user.id):null;
+    res.json({ok:true,state:publicCrashState(),userBet:own?{roundId:own.roundId,amountDls:own.amountDls,autoCashout:own.autoCashout,status:own.status,cashedAt:own.cashedAt||null,payoutDls:own.payoutDls||0}:null});
+  });
+  app.post('/api/crash/join',(req,res)=>{
+    const user=requireUser(req,res);if(!user)return;
+    if(crashGlobal.phase!=='betting')return res.status(409).json({ok:false,error:'betting_closed'});
+    if(crashGlobal.players.has(user.id))return res.status(409).json({ok:false,error:'already_joined'});
+    const amount=Number(req.body?.betDls),auto=Number(req.body?.autoCashout||0);
+    if(!Number.isFinite(amount)||amount<=0||amount>100000000)return res.status(400).json({ok:false,error:'invalid_bet'});
+    if(auto && (auto<1.01||auto>10000))return res.status(400).json({ok:false,error:'invalid_auto_cashout'});
+    const debit=economy.debitForGame(user.id,amount,'crash-global');
+    if(!debit.ok)return res.status(400).json({ok:false,error:debit.error});
+    const p={userId:user.id,username:user.username,amountDls:amount,autoCashout:auto||0,status:'active',roundId:crashGlobal.roundId};
+    crashGlobal.players.set(user.id,p); broadcast({type:'CRASH_PLAYER_JOINED',payload:{roundId:crashGlobal.roundId,username:user.username}});
+    res.json({ok:true,state:publicCrashState(),userBet:{roundId:p.roundId,amountDls:amount,autoCashout:p.autoCashout,status:'active'},balanceDls:debit.balance});
+  });
+  app.post('/api/crash/cashout',(req,res)=>{
+    const user=requireUser(req,res);if(!user)return;
+    const p=crashGlobal.players.get(user.id);
+    if(!p||p.roundId!==crashGlobal.roundId)return res.status(404).json({ok:false,error:'no_active_bet'});
+    if(crashGlobal.phase!=='flying'||p.status!=='active')return res.status(409).json({ok:false,error:'cashout_unavailable'});
+    const result=settleCrashPlayer(p,false);
+    if(!result)return res.status(500).json({ok:false,error:'settlement_failed'});
+    res.json({ok:true,result:{outcome:'win',current:p.cashedAt,multiplier:p.cashedAt,payout:p.payoutDls},balanceDls:result.balance,state:publicCrashState()});
+  });
+  app.post('/api/crash/cancel',(req,res)=>{
+    const user=requireUser(req,res);if(!user)return;
+    const p=crashGlobal.players.get(user.id);
+    if(!p||p.roundId!==crashGlobal.roundId)return res.status(404).json({ok:false,error:'no_active_bet'});
+    if(crashGlobal.phase!=='betting'||p.status!=='active')return res.status(409).json({ok:false,error:'cancel_unavailable'});
+    const result=economy.creditGameResult(user.id,p.amountDls,{id:p.roundId,gameId:'crash-global-cancel',result:{outcome:'cancelled',multiplier:1}});
+    if(!result.ok)return res.status(500).json({ok:false,error:'refund_failed'});
+    p.status='cancelled';
+    res.json({ok:true,balanceDls:result.balance,state:publicCrashState()});
+  });
+
   app.use('/api/games', (req, _res, next) => {
     const user = economy.sessionUser(req);
     req.__economyUser = user;
@@ -163,6 +249,7 @@ export function installGameRoutes(app, economy) {
     if (gameId==='case-battles') return res.status(410).json({ok:false,error:'use_case_battles_pvp_endpoint'});
     if (!gameId || !Number.isFinite(betDls) || betDls<=0 || betDls>100000000) return res.status(400).json({ok:false,error:'invalid_bet'});
     if(gameId==='cases'){const c=caseCatalog.get(String(req.body?.caseId||''));const count=Math.max(1,Math.min(4,Number(req.body?.count)||1));if(!c)return res.status(400).json({ok:false,error:'case_not_found'});if(Math.abs(c.price*count-betDls)>0.01)return res.status(400).json({ok:false,error:'case_price_mismatch'});}
+    if(gameId==='crash')return res.status(410).json({ok:false,error:'use_global_crash_endpoint'});
     if(gameId==='case-battles'){const ids=Array.isArray(req.body?.caseIds)?req.body.caseIds.map(String):[String(req.body?.caseId||'')];const cs=ids.map(id=>caseCatalog.get(id));if(!cs.length||cs.some(c=>!c))return res.status(400).json({ok:false,error:'case_not_found'});const total=cs.reduce((n,c)=>n+Number(c.price||0),0);if(Math.abs(total-betDls)>0.01)return res.status(400).json({ok:false,error:'battle_price_mismatch'});}
     const result=economy.debitForGame(user.id,betDls,gameId);
     if (!result.ok) return res.status(400).json({ok:false,error:result.error});
