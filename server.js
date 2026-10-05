@@ -61,7 +61,7 @@ installEconomyRoutes(app, {
   broadcast,
 });
 
-installGameRoutes(app, { sessionUser, debitForGame, creditGameResult });
+installGameRoutes(app, { sessionUser, debitForGame, creditGameResult }, { broadcast });
 
 // In-memory registered link codes from website accounts (code -> { username, code, growId, timestamp })
 const registeredLinkCodes = new Map();
