@@ -64,6 +64,14 @@ export function installGameRoutes(app, economy) {
     const commitment=hash(serverSeed);
     const round={id:id(),userId:user.id,username:user.username,gameId,betDls,status:'ACTIVE',
       serverSeed,serverSeedHash:commitment,clientSeed,nonce,createdAt:new Date().toISOString(),balanceAfterBet:result.balance};
+    if (gameId==='mines') {
+      const size=Math.max(2,Math.min(8,Number(req.body?.gridSize)||5)); const total=size*size; const mineCount=Math.max(1,Math.min(total-1,Number(req.body?.mines)||3));
+      const rr=rng(serverSeed+':mines'); const mineSet=new Set(); while(mineSet.size<mineCount) mineSet.add(Math.floor(rr()*total));
+      round.state={size,mineCount,revealed:[],mineMap:[...mineSet]};
+    } else if (gameId==='towers') {
+      const cols=Math.max(2,Math.min(4,Number(req.body?.columns)||4)); const traps=Math.max(1,Math.min(cols-1,Number(req.body?.traps)||1));
+      const rr=rng(serverSeed+':towers'); round.state={floor:0,cols,traps,trapsMap:Array.from({length:8},()=>{const set=new Set();while(set.size<traps)set.add(Math.floor(rr()*cols));return [...set];}),traps:Array.from({length:8},()=>[])}; round.state.traps=round.state.trapsMap; delete round.state.trapsMap;
+    }
     rounds.set(round.id,round); persist();
     res.json({ok:true,roundId:round.id,serverSeedHash:commitment,clientSeed,nonce,balanceDls:result.balance});
   });
