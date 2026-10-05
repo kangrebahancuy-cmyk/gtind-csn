@@ -79,7 +79,7 @@ export function installGameRoutes(app, economy) {
     if (!SERVER_AUTH_GAMES.has(gameId)) return res.status(409).json({ok:false,error:'game_not_server_authoritative'});
     if (!gameId || !Number.isFinite(betDls) || betDls<=0 || betDls>100000000) return res.status(400).json({ok:false,error:'invalid_bet'});
     if(gameId==='cases'){const c=caseCatalog.get(String(req.body?.caseId||''));const count=Math.max(1,Math.min(4,Number(req.body?.count)||1));if(!c)return res.status(400).json({ok:false,error:'case_not_found'});if(Math.abs(c.price*count-betDls)>0.01)return res.status(400).json({ok:false,error:'case_price_mismatch'});}
-    if(gameId==='case-battles'){const c=caseCatalog.get(String(req.body?.caseId||''));if(!c)return res.status(400).json({ok:false,error:'case_not_found'});if(Math.abs(Number(c.price)-betDls)>0.01)return res.status(400).json({ok:false,error:'battle_price_mismatch'});}
+    if(gameId==='case-battles'){const ids=Array.isArray(req.body?.caseIds)?req.body.caseIds.map(String):[String(req.body?.caseId||'')];const cs=ids.map(id=>caseCatalog.get(id));if(!cs.length||cs.some(c=>!c))return res.status(400).json({ok:false,error:'case_not_found'});const total=cs.reduce((n,c)=>n+Number(c.price||0),0);if(Math.abs(total-betDls)>0.01)return res.status(400).json({ok:false,error:'battle_price_mismatch'});}
     const result=economy.debitForGame(user.id,betDls,gameId);
     if (!result.ok) return res.status(400).json({ok:false,error:result.error});
     const serverSeed=crypto.randomBytes(32).toString('hex');
@@ -90,7 +90,7 @@ export function installGameRoutes(app, economy) {
       serverSeed,serverSeedHash:commitment,clientSeed,nonce,createdAt:new Date().toISOString(),balanceAfterBet:result.balance};
     if (gameId==='blackjack') { const initial=startBlackjack(round); round.initialResult=initial; }
     if (gameId==='crash') { const rr=rng(serverSeed+':crash'); const x=rr(); round.state={startedAt:Date.now()+5000,crashPoint:x<0.01?1:Number(Math.max(1,0.99/(1-x)).toFixed(2))}; }
-    if (gameId==='case-battles') { const caseId=String(req.body?.caseId||''); const c=caseCatalog.get(caseId); if(!c)return res.status(400).json({ok:false,error:'case_not_found'}); round.state={caseId:c.id,mode:'house',houseSeed:crypto.randomBytes(16).toString('hex')}; }
+    if (gameId==='case-battles') { const ids=Array.isArray(req.body?.caseIds)?req.body.caseIds.map(String):[String(req.body?.caseId||'')]; round.state={caseIds:ids,mode:'house',houseSeed:crypto.randomBytes(16).toString('hex')}; }
     if (gameId==='cases') { const c=caseCatalog.get(String(req.body?.caseId||'')); const count=Math.max(1,Math.min(4,Number(req.body?.count)||1)); if(!c)return res.status(400).json({ok:false,error:'case_not_found'}); const total=c.price*count; if(Math.abs(total-betDls)>0.01)return res.status(400).json({ok:false,error:'case_price_mismatch'}); round.state={caseId:c.id,count}; }
     if (gameId==='mines') {
       const size=Math.max(2,Math.min(8,Number(req.body?.gridSize)||5)); const total=size*size; const mineCount=Math.max(1,Math.min(total-1,Number(req.body?.mines)||3));
@@ -181,75 +181,9 @@ function resolveCrash(round,action){
   return {outcome:'active',current,payout:0,continue:true};
 }
 function resolveCaseBattle(round,r,action){
-  const c=caseCatalog.get(String(round.state?.caseId||''));if(!c)return {outcome:'invalid',payout:0,error:'case_not_found'};
-  let userTotal=0,houseTotal=0;
-  const pick=()=>{let x=r()*100,w=c.items[c.items.length-1];for(const it of c.items){x-=Math.max(0,Number(it.chance)||0);if(x<=0){w=it;break;}}return w;};
-  const userItems=[],houseItems=[];for(let i=0;i<3;i++){const u=pick(),h=pick();userItems.push(u);houseItems.push(h);userTotal+=u.price;houseTotal+=h.price;}
+  const ids=Array.isArray(round.state?.caseIds)?round.state.caseIds:[];if(!ids.length)return {outcome:'invalid',payout:0,error:'case_not_found'};
+  let userTotal=0,houseTotal=0;const userItems=[],houseItems=[];
+  for(const id of ids){const c=caseCatalog.get(String(id));if(!c)return {outcome:'invalid',payout:0,error:'case_not_found'};const pick=()=>{let x=r()*100,w=c.items[c.items.length-1];for(const it of c.items){x-=Math.max(0,Number(it.chance)||0);if(x<=0){w=it;break;}}return w;};const u=pick(),h=pick();userItems.push(u);houseItems.push(h);userTotal+=Number(u.price||0);houseTotal+=Number(h.price||0);}
   const win=userTotal>=houseTotal;return {outcome:win?'win':'loss',userItems,houseItems,userTotal,houseTotal,payout:win?round.betDls*2:0,multiplier:win?2:0};
 }
-\nfunction resolveGame(gameId,r,action,bet,state) {
-  switch(gameId) {
-    case 'mines': {
-      const size=Math.max(2,Math.min(8,Number(state?.size)||Number(action.gridSize)||5)); const total=size*size; const mineCount=Math.max(1,Math.min(total-1,Number(state?.mineCount)||Number(action.mines)||3));
-      const selected=Number(action.selected); const mineSet=new Set(Array.isArray(state?.mineMap)?state.mineMap.map(Number):[]);
-      const revealed=Array.isArray(state?.revealed)?state.revealed.map(Number):[];
-      if(!Number.isInteger(selected)||selected<0||selected>=total||revealed.includes(selected)) return {outcome:'invalid',payout:0,error:'invalid_tile'};
-      const isMine=mineSet.has(selected); const next=[...revealed,selected]; const safeCount=next.filter(n=>!mineSet.has(n)).length;
-      const prob=Array.from({length:safeCount},(_,i)=>(total-mineCount-i)/(total-i)).reduce((a,b)=>a*b,1);
-      const multiplier=safeCount?Math.max(1.01,Number((0.99/prob).toFixed(2))):1;
-      if(isMine) return {outcome:'loss',explodedTile:selected,mineMap:[...mineSet],multiplier:0,payout:0,continue:false};
-      if(safeCount===total-mineCount) return {outcome:'win',safeCount,mineMap:[...mineSet],multiplier,payout:bet*multiplier,continue:false};
-      return {outcome:'safe',safeCount,mineMap:[],multiplier,payout:0,continue:true,state:{size,mineCount,revealed:next,mineMap:[...mineSet]}};
-    }
-    case 'towers': {
-      const cols=Math.max(2,Math.min(4,Number(action.columns)||4)); const traps=Math.max(1,Math.min(cols-1,Number(action.traps)||1)); const floor=Math.max(0,Number(action.floor)||0);
-      const generated=Array.isArray(state?.traps)?state.traps:[]; if(!generated.length)return {outcome:'invalid',payout:0,error:'round_state_missing'};
-      const col=Number(action.col); if(!Number.isInteger(col)||col<0||col>=cols||floor>7)return {outcome:'invalid',payout:0,error:'invalid_tile'};
-      const isTrap=generated[floor].includes(col); const multipliers=action.multipliers&&Array.isArray(action.multipliers)?action.multipliers.map(Number):[1.28,1.65,2.15,2.8,3.65,4.8,6.3,8.3];
-      if(isTrap)return {outcome:'loss',floor,col,traps:generated,payout:0,continue:false};
-      const nextFloor=floor+1; const multiplier=multipliers[Math.min(nextFloor-1,multipliers.length-1)]||1;
-      if(nextFloor>=8)return {outcome:'win',floor:nextFloor,traps:generated,multiplier,payout:bet*multiplier,continue:false};
-      return {outcome:'safe',floor:nextFloor,traps:[],multiplier,payout:0,continue:true,state:{floor:nextFloor,traps:generated}};
-    }
-    case 'coinflip': {
-      const win=r()<0.5; const choice=action.choice||'heads'; const step=Math.max(0,Number(action.step)||0); const mults=[1.92,3.84,7.68,15.36,30.72,61.44,122.88,245.76,491.52]; const multiplier=mults[Math.min(step,mults.length-1)]||1.92; const cashout=action.cashout===true; const payout=action.final&&win?bet*multiplier:(cashout?bet*(step>0?mults[Math.min(step-1,mults.length-1)]:1):0); return { outcome:win?'win':'loss', choice, winningSide:win?choice:(choice==='heads'?'tails':'heads'), step, multiplier:win?multiplier:0, payout, cashedOut:cashout&&win };
-    }
-    case 'roulette': {
-      const n=Math.floor(r()*37); const bets=action.bets && typeof action.bets==='object'?action.bets:{};
-      let payout=0; const color=isRed(n)?'red':n===0?'green':'black';
-      const add=(key,m)=>{const a=Number(bets[key]||0);if(Number.isFinite(a)&&a>0)payout+=a*m;};
-      add(`num_${n}`,36);
-      if(n>=1&&n<=12)add('1st_12',3); else if(n<=24&&n>=13)add('2nd_12',3); else if(n>=25)add('3rd_12',3);
-      if(n>0){ if(n%3===1)add('col_1',3); if(n%3===2)add('col_2',3); if(n%3===0)add('col_3',3); }
-      if(color==='red')add('red',2); if(color==='black')add('black',2);
-      if(n>0&&n%2===0)add('even',2); if(n>0&&n%2===1)add('odd',2);
-      if(n>=1&&n<=18)add('1_to_18',2); if(n>=19&&n<=36)add('19_to_36',2);
-      return {winningNumber:n,color,outcome:payout>0?'win':'loss',payout,multiplier:bet?payout/bet:0};
-    }
-    case 'keno': {
-      const pool=Array.from({length:40},(_,i)=>i+1); const drawn=[];
-      while(drawn.length<10){ const i=Math.floor(r()*pool.length); drawn.push(pool.splice(i,1)[0]); }
-      const picks=Array.isArray(action.picks)?action.picks.map(Number):[]; const hits=picks.filter(n=>drawn.includes(n)).length;
-      const multipliers=[0,0,0,1.5,3,8,20,50,100,250,1000]; const m=multipliers[Math.min(hits,multipliers.length-1)]||0;
-      return {drawn,hits,multiplier:m,payout:bet*m};
-    }
-    case 'dice': {
-      const roll=Number((r()*100).toFixed(2)); const target=Number(action.target||50); const over=action.condition==='over';
-      const win=over?roll>target:roll<target; const probability=over?100-target:target; const m=Math.max(1.01,Math.min(95,99/probability));
-      return {roll,target,condition:over?'over':'under',outcome:win?'win':'loss',multiplier:win?m:0,payout:win?bet*m:0};
-    }
-    case 'cases': {
-      const c=caseCatalog.get(String(state?.caseId||'')); if(!c)return {outcome:'invalid',payout:0,error:'case_not_found'};
-      const count=Math.max(1,Math.min(4,Number(state.count)||1)); const winners=[];
-      for(let n=0;n<count;n++){let x=r()*100,w=c.items[c.items.length-1];for(const item of c.items){x-=Math.max(0,Number(item.chance)||0);if(x<=0){w=item;break;}}winners.push(w);}
-      const payout=winners.reduce((sum,w)=>sum+Math.max(0,Number(w.price)||0),0);
-      return {outcome:'win',winners,payout,multiplier:bet?payout/bet:0};
-    }
-    default: {
-      const win=r()>=0.5; return {outcome:win?'win':'loss',multiplier:win?1.9:0,payout:win?bet*1.9:0};
-    }
-  }
-}
-function payoutMul(win,m){return win?m:0;}
-function isRed(n){return [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36].includes(n);}
-function isBlack(n){return n!==0&&!isRed(n);}
+
