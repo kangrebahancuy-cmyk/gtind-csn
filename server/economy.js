@@ -1,29 +1,12 @@
-import fs from 'fs';
-import path from 'path';
 import crypto from 'crypto';
-
-const DATA_DIR = path.join(process.cwd(), 'data');
-const DATA_FILE = path.join(DATA_DIR, 'economy.json');
+import { loadEconomyState, saveEconomyState } from './economy-store.js';
 const sessions = new Map();
 
 function now() { return new Date().toISOString(); }
 function id(prefix) { return `${prefix}_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`; }
 
-function ensureStore() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify({ users: [], transactions: [], deposits: [], withdrawals: [] }, null, 2));
-  }
-}
 function load() {
-  ensureStore();
-  let db;
-  try {
-    const value = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    db = { users: [], transactions: [], deposits: [], withdrawals: [], ...value };
-  } catch {
-    db = { users: [], transactions: [], deposits: [], withdrawals: [] };
-  }
+  const db = loadEconomyState();
   const adminUsername = String(process.env.ADMIN_USERNAME || '').trim();
   const adminPassword = String(process.env.ADMIN_PASSWORD || '');
   if (adminUsername && adminPassword && !db.users.some(u => normalizeUsername(u.username) === normalizeUsername(adminUsername))) {
@@ -37,10 +20,7 @@ function load() {
   return db;
 }
 function save(db) {
-  ensureStore();
-  const tmp = DATA_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
-  fs.renameSync(tmp, DATA_FILE);
+  saveEconomyState(db);
 }
 function normalizeUsername(v) { return String(v || '').trim().toLowerCase(); }
 function publicUser(u) {
