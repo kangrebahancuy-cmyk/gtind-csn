@@ -101,6 +101,15 @@ export function installGameRoutes(app, economy) {
 }
 
 function resolveCashout(round, action) {
+  if(round.gameId==='mines'){
+    const size=Number(round.state?.size)||5,total=size*size,mineCount=Number(round.state?.mineCount)||3,revealed=Array.isArray(round.state?.revealed)?round.state.revealed.length:0;
+    if(revealed<=0)return {outcome:'cashout',multiplier:1,payout:0,cashedOut:true};
+    let prob=1;for(let i=0;i<revealed;i++)prob*=(total-mineCount-i)/(total-i);
+    const multiplier=Math.max(1.01,Number((0.99/prob).toFixed(2)));return {outcome:'cashout',multiplier,payout:round.betDls*multiplier,cashedOut:true};
+  }
+  if(round.gameId==='towers'){
+    const floor=Math.max(0,Number(round.state?.floor)||0);const multipliers=[1.28,1.65,2.15,2.8,3.65,4.8,6.3,8.3];const multiplier=floor?multipliers[Math.min(floor-1,7)]:1;return {outcome:'cashout',floor,multiplier,payout:round.betDls*multiplier,cashedOut:true};
+  }
   const mults=[1.92,3.84,7.68,15.36,30.72,61.44,122.88,245.76,491.52];
   const step=Math.max(0,Math.min(mults.length,Number(action.step)||0));
   const multiplier=step>0?mults[step-1]:1;
