@@ -111,6 +111,8 @@ interface GameContextType {
   deductBet: (dlsAmount: number) => boolean;
   awardPayout: (dlsPayout: number, gameName: string, multiplier: number, betDls: number) => void;
   recordLoss: (betDls: number, gameName: string) => void;
+  startGameRound: (gameId: string, betDls: number, clientSeed?: string) => Promise<{ success:boolean; roundId?:string; serverSeedHash?:string; message?:string; balanceDls?:number }>;
+  resolveGameRound: (roundId: string, action: Record<string, unknown>) => Promise<{ success:boolean; result?:any; payoutDls?:number; balanceDls?:number; finished?:boolean; serverSeed?:string; serverSeedHash?:string; message?:string }>;
 
   // Live Bets
   liveBets: LiveBet[];
@@ -613,6 +615,31 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     balanceAnimTimerRef.current = setTimeout(() => {
       setBalanceGainAnim(null);
     }, 2500);
+  };
+
+  const startGameRound = async (gameId: string, betDls: number, clientSeed?: string) => {
+    if (!currentUserRef.current) return {success:false,message:'Please Sign In first.'};
+    try {
+      const {response,data}=await apiJson('/api/games/start',{method:'POST',body:JSON.stringify({gameId,betDls,clientSeed})});
+      if(!response.ok) return {success:false,message:data.error||'Unable to start game.'};
+      if(data.balanceDls !== undefined){
+        const u={...currentUserRef.current,balanceDls:Number(data.balanceDls)};
+        setCurrentUser(u); currentUserRef.current=u;
+      }
+      return {success:true,roundId:data.roundId,serverSeedHash:data.serverSeedHash,balanceDls:data.balanceDls};
+    } catch { return {success:false,message:'Game server tidak merespons.'}; }
+  };
+
+  const resolveGameRound = async (roundId: string, action: Record<string, unknown>) => {
+    try {
+      const {response,data}=await apiJson('/api/games/resolve',{method:'POST',body:JSON.stringify({roundId,action})});
+      if(!response.ok) return {success:false,message:data.error||'Unable to resolve game.'};
+      if(data.balanceDls !== undefined){
+        const u={...currentUserRef.current!,balanceDls:Number(data.balanceDls)};
+        setCurrentUser(u); currentUserRef.current=u;
+      }
+      return {success:true,result:data.result,payoutDls:data.payoutDls,balanceDls:data.balanceDls,finished:data.finished,serverSeed:data.serverSeed,serverSeedHash:data.serverSeedHash};
+    } catch { return {success:false,message:'Game server tidak merespons.'}; }
   };
 
   const canAfford = (dlsAmount: number) => {
