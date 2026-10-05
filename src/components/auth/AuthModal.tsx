@@ -21,7 +21,7 @@ export const AuthModal: React.FC<{ isOpen: boolean; onClose: () => void; initial
   const isUnameValid = username.trim().length >= 4;
   const isPassValid = password.length >= 8;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -41,7 +41,7 @@ export const AuthModal: React.FC<{ isOpen: boolean; onClose: () => void; initial
         return;
       }
 
-      const res = register(cleanUname, password, growId.trim());
+      const res = await register(cleanUname, password, growId.trim());
       if (res.success) {
         sound.playCashout();
         onClose();
@@ -49,7 +49,7 @@ export const AuthModal: React.FC<{ isOpen: boolean; onClose: () => void; initial
         setError(res.message);
       }
     } else {
-      const res = login(cleanUname, password);
+      const res = await login(cleanUname, password);
       if (res.success) {
         sound.playClick();
         onClose();
@@ -226,7 +226,7 @@ export const AuthModal: React.FC<{ isOpen: boolean; onClose: () => void; initial
             type="submit"
             className="w-full py-3.5 rounded-xl bg-[#0074e4] hover:bg-[#0085ff] active:bg-[#0066cb] text-white font-extrabold text-xs uppercase tracking-wider shadow-lg shadow-[#0074e4]/30 transition flex items-center justify-center gap-2 mt-2 cursor-pointer"
           >
-            <span>{mode === 'login' ? 'Sign In' : 'Create Account & Claim 500 DLS'}</span>
+            <span>{mode === 'login' ? 'Sign In' : 'Create Account'}</span>
             <ArrowRight className="w-4 h-4" />
           </button>
         </form>
