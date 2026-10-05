@@ -13,7 +13,7 @@ try{
  await withMongoTransaction(async(session,tx)=>{
   for(const u of Array.isArray(economy.users)?economy.users:[]){
    const id=String(u.id), grow=u.growId?String(u.growId).trim().toLowerCase():null;
-   await tx.collection('users').updateOne({id},{$setOnInsert:{id,username:u.username,usernameNormalized:String(u.username||'').trim().toLowerCase(),passwordHash:u.passwordHash,growId:u.growId||null,growIdNormalized:grow,gtpsLinked:Boolean(u.gtpsLinked&&u.growId),linkCode:u.linkCode,isBanned:Boolean(u.isBanned),isMuted:Boolean(u.isMuted),isAdmin:Boolean(u.isAdmin),createdAt:new Date(u.createdAt||Date.now())}},{upsert:true,session});
+   await tx.collection('users').updateOne({id},{$setOnInsert:{id,username:u.username,usernameNormalized:String(u.username||'').trim().toLowerCase(),passwordHash:u.passwordHash,...(u.growId?{growId:u.growId,growIdNormalized:grow}:{}),gtpsLinked:Boolean(u.gtpsLinked&&u.growId),linkCode:u.linkCode,isBanned:Boolean(u.isBanned),isMuted:Boolean(u.isMuted),isAdmin:Boolean(u.isAdmin),createdAt:new Date(u.createdAt||Date.now())}},{upsert:true,session});
    await tx.collection('wallets').updateOne({userId:id},{$setOnInsert:{userId:id,balanceDls:Number(u.balanceDls||0),updatedAt:new Date()}},{upsert:true,session});
   }
   const txns=Array.isArray(economy.transactions)?economy.transactions:[];
