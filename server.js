@@ -82,7 +82,7 @@ installEconomyRoutes(app, {
   broadcast,
 });
 
-installGameRoutes(app, { sessionUser, debitForGame, creditGameResult }, { broadcast });
+const installGamesPromise = installGameRoutes(app, { sessionUser, debitForGame, creditGameResult }, { broadcast });
 
 // Real-Time WebSocket Server
 const wss = new WebSocketServer({ server, path: '/ws' });
@@ -139,6 +139,7 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 (async () => {
   try {
     await ensureMongoSchema();
+    await installGamesPromise;
     server.listen(PORT, () => {
       console.log(`[Supreme Casino] Server running on port ${PORT}`);
       console.log(`[Supreme Casino] Healthcheck: http://localhost:${PORT}/healthz`);
