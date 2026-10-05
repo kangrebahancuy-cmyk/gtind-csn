@@ -100,7 +100,7 @@ const installGamesPromise = installGameRoutes(app, {
   sessionUser,
   debitForGame: async (...args) => {
     const result = await debitForGame(...args);
-    if (result?.ok) broadcast({ type: 'LIVE_BET', payload: { referenceId: result.referenceId, gameId: args[2], userId: args[0], amountDls: args[1], timestamp: Date.now() } });
+    if (result?.ok) broadcast({ type: 'LIVE_BET', payload: { referenceId: result.referenceId, gameId: args[2], username: result.username || undefined, amountDls: args[1], timestamp: Date.now() } });
     return result;
   },
   creditGameResult: async (...args) => {
@@ -128,6 +128,10 @@ wss.on('connection', async (ws, req) => {
     ws.close(1008, 'authentication_required');
     return;
   }
+  if (user.isBanned) {
+    ws.close(1008, 'account_banned');
+    return;
+  }
 
   ws.send(JSON.stringify({
     type: 'INIT_STATE',
@@ -145,6 +149,11 @@ wss.on('connection', async (ws, req) => {
         if (message.type === 'LIVE_BET' || message.type === 'BATTLE_CREATE' || message.type === 'BATTLE_UPDATE') {
           ws.send(JSON.stringify({ type:'ERROR', payload:{ error:'server_authoritative_event' } }));
         }
+        return;
+      }
+
+      if (user.isMuted) {
+        ws.send(JSON.stringify({ type:'ERROR', payload:{ error:'account_muted' } }));
         return;
       }
 
