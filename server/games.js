@@ -100,7 +100,7 @@ export function installGameRoutes(app, economy) {
       round.state={size,mineCount,revealed:[],mineMap:[...mineSet]};
     } else if (gameId==='towers') {
       const requestedCols=Math.max(2,Math.min(4,Number(req.body?.columns)||4)); const requestedTraps=Math.max(1,Math.min(requestedCols-1,Number(req.body?.traps)||1)); const cols=requestedCols; const traps=requestedTraps;
-      const rr=rng(serverSeed+':towers'); round.state={floor:0,cols,traps,trapsMap:Array.from({length:8},()=>{const set=new Set();while(set.size<traps)set.add(Math.floor(rr()*cols));return [...set];}),traps:Array.from({length:8},()=>[])}; round.state.traps=round.state.trapsMap; delete round.state.trapsMap;
+      const rr=rng(serverSeed+':towers'); round.state={floor:0,cols,traps,trapsMap:Array.from({length:8},()=>{const set=new Set();while(set.size<traps)set.add(Math.floor(rr()*cols));return [...set];}),traps:[],multipliers:(TOWERS_CONFIGS[String(req.body?.difficulty)]||TOWERS_CONFIGS.Easy).multipliers};
     }
     rounds.set(round.id,round); persist();
     res.json({ok:true,roundId:round.id,serverSeedHash:commitment,clientSeed,nonce,balanceDls:result.balance,initialResult:round.initialResult||undefined});
@@ -244,13 +244,15 @@ function resolveGame(gameId, random, action, betDls, state) {
   }
   if(gameId==='roulette'){
     const bets=action.bets&&typeof action.bets==='object'?action.bets:{};
+    const factor=action.currency==='BGLS'?100:1;
     const number=Math.floor(random()*37);
-    const totalBet=Object.values(bets).reduce((s,v)=>s+(Number(v)||0),0);
+    const totalBet=Object.values(bets).reduce((s,v)=>s+(Number(v)||0)*factor,0);
+    if(Math.abs(totalBet-betDls)>0.01)return {outcome:'invalid',payout:0,error:'bet_mismatch'};
     if(totalBet<=0)return {outcome:'invalid',payout:0,error:'no_bets'};
     const validBet=(key,amount)=>{const a=Number(amount);if(!Number.isFinite(a)||a<=0)return 0;return Math.min(a,100000000);};
     let payout=0;
     for(const [key,raw] of Object.entries(bets)){
-      const amount=validBet(key,raw); if(!amount)continue;
+      const amount=validBet(key,raw)*factor; if(!amount)continue;
       let win=false,mult=0;
       if(key==='num_0'||/^num_\\d+$/.test(key)){const n=Number(key.slice(4));win=n===number;mult=35;}
       else if(key==='red'||key==='black'){win=number!==0&&(key==='red')===[1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36].includes(number);mult=1;}
