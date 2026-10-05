@@ -361,7 +361,6 @@ export const RouletteGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           sound.playCashout();
           sound.playWin();
         } else {
-          recordLoss(totalBetDls, 'Roulette');
           setPayoutResult({ totalWin: 0, won: false });
           sound.playExplosion();
         }
