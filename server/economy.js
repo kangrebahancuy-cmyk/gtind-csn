@@ -208,6 +208,14 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret }) {
     res.json({ok:true,user:publicUser(user),legacyBalanceIgnored:legacyBalance});
   });
 
+  app.post('/api/account/unlink-growid', (req,res) => {
+    const user=requireAuth(req,res); if(!user)return;
+    const db=load(); const fresh=db.users.find(u=>u.id===user.id);
+    if(!fresh?.growId) return res.status(400).json({ok:false,error:'not_linked'});
+    fresh.growId=undefined; fresh.gtpsLinked=false; save(db);
+    res.json({ok:true,user:publicUser(fresh)});
+  });
+
   app.post('/api/account/growid', (req,res) => {
     const user=requireAuth(req,res); if(!user)return;
     const growId=String(req.body?.growId||'').trim();
