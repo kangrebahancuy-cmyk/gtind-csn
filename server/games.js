@@ -78,11 +78,18 @@ async function mongoClaimLease(name, owner, ttlMs){
 
 export function installGameRoutes(app, economy, options = {}) {
   const broadcast = typeof options.broadcast === 'function' ? options.broadcast : () => {};
+  const instanceId = crypto.randomUUID();
   const persistCrash = () => {
     ensure();
     const safe={...crashGlobal,players:[...crashGlobal.players.values()]};
     fs.writeFileSync(CRASH_FILE+'.tmp',JSON.stringify(safe,null,2));
     fs.renameSync(CRASH_FILE+'.tmp',CRASH_FILE);
+    void (async()=>{try{
+      const db=await getMongoDb();
+      await db.collection('crashRounds').replaceOne({id:crashGlobal.roundId},{id:crashGlobal.roundId,phase:crashGlobal.phase,countdown:crashGlobal.countdown,multiplier:crashGlobal.multiplier,crashPoint:crashGlobal.crashPoint,serverSeed:crashGlobal.serverSeed,serverSeedHash:crashGlobal.serverSeedHash,startedAt:crashGlobal.startedAt,bettingStartedAt:crashGlobal.bettingStartedAt,history:crashGlobal.history,nextRoundAt:crashGlobal.nextRoundAt,updatedAt:Date.now()},{upsert:true});
+      const players=db.collection('crashPlayers');
+      for(const p of crashGlobal.players.values()) await players.replaceOne({roundId:p.roundId,userId:p.userId},{...p,roundId:p.roundId,updatedAt:Date.now()},{upsert:true});
+    }catch{} })();
   };
   const loadCrash = () => {
     ensure();
@@ -104,8 +111,10 @@ export function installGameRoutes(app, economy, options = {}) {
     persistCrash();
     broadcast({type:'CRASH_STATE',payload:publicCrashState()});
   };
-  const crashTick = () => {
+  const crashTick = async () => {
+    if(!(await mongoClaimLease('crash-global-leader',instanceId,1500))) return;
     const now=Date.now();
+    try { const db=await getMongoDb(); const ps=await db.collection('crashPlayers').find({roundId:crashGlobal.roundId}).toArray(); crashGlobal.players=new Map(ps.map(({_id,...p})=>[p.userId,p])); } catch {}
     if(crashGlobal.phase==='betting'){
       const remaining=Math.max(0,5-(now-crashGlobal.bettingStartedAt)/1000);
       crashGlobal.countdown=Number(remaining.toFixed(1));
@@ -125,7 +134,7 @@ export function installGameRoutes(app, economy, options = {}) {
     }
     broadcast({type:'CRASH_STATE',payload:publicCrashState()});
   };
-  const timer=setInterval(crashTick,100);
+  const timer=setInterval(()=>{void crashTick();},100);
   if(typeof timer.unref==='function')timer.unref();
   if(!loadCrash()) startCrashRound();
   if(crashGlobal.phase==='crashed' && crashGlobal.nextRoundAt<=Date.now()) startCrashRound();
