@@ -50,6 +50,8 @@ export const TowersGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     setAuthModalOpen,
     setActiveGameSession,
     checkCanPlayGame,
+    startGameRound,
+    resolveGameRound,
   } = useGame();
 
   const [betMode, setBetMode] = useState<'manual' | 'auto'>('manual');
@@ -61,6 +63,7 @@ export const TowersGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [userPicks, setUserPicks] = useState<{ floor: number; col: number }[]>([]);
   const [result, setResult] = useState<'win' | 'loss' | null>(null);
   const [roundBet, setRoundBet] = useState(0);
+  const [roundId, setRoundId] = useState<string | null>(null);
   const [cashedOutInfo, setCashedOutInfo] = useState<{ multiplier: number; payout: number } | null>(null);
   const [deadPick, setDeadPick] = useState<{ floor: number; col: number } | null>(null);
 
@@ -87,88 +90,31 @@ export const TowersGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     }
   }, []);
 
-  const startClimb = () => {
+  const startClimb = async () => {
     if (!user.isAuthenticated) { setAuthModalOpen(true); return; }
     if (!checkCanPlayGame('towers', 'Towers')) return;
-
-    const b = fromActiveAmount(Number(bet));
-    if (!b || b <= 0 || !deductBet(b)) return;
-
+    const b = fromActiveAmount(Number(bet)); if (!b || b <= 0) return;
+    const started=await startGameRound('towers',b);
+    if(!started.success||!started.roundId)return;
+    setRoundId(started.roundId); setTraps([]); setFloor(0); setUserPicks([]); setRoundBet(b); setPlaying(true); setResult(null); setDeadPick(null); setCashedOutInfo(null); setActiveGameSession({gameId:'towers',gameTitle:'Towers'});
     sound.playClick();
-
-    const generated: number[][] = Array.from({ length: TOTAL_FLOORS }, () => {
-      const s = new Set<number>();
-      while (s.size < cfg.traps) s.add(Math.floor(Math.random() * cfg.columns));
-      return [...s];
-    });
-
-    setTraps(generated);
-    setFloor(0);
-    setUserPicks([]);
-    setRoundBet(b);
-    setPlaying(true);
-    setResult(null);
-    setDeadPick(null);
-    setCashedOutInfo(null);
-    setActiveGameSession({ gameId: 'towers', gameTitle: 'Towers' });
-    localStorage.setItem(
-      'voidps_towers_state',
-      JSON.stringify({ difficulty, floor: 0, traps: generated, userPicks: [], roundBet: b, playing: true })
-    );
   };
 
-  const pickTile = (fIdx: number, cIdx: number) => {
-    if (!playing || fIdx !== floor) return;
-    const isTrap = traps[fIdx]?.includes(cIdx);
-    const newPicks = [...userPicks, { floor: fIdx, col: cIdx }];
-    setUserPicks(newPicks);
-
-    if (isTrap) {
-      setDeadPick({ floor: fIdx, col: cIdx });
-      setPlaying(false);
-      setResult('loss');
-      recordLoss(roundBet, 'Towers');
-      sound.playExplosion();
-      setActiveGameSession(null);
-      localStorage.removeItem('voidps_towers_state');
-      return;
-    }
-
-    sound.playGem();
-    const nextF = floor + 1;
-    setFloor(nextF);
-
-    if (nextF >= TOTAL_FLOORS) {
-      const finalMult = cfg.multipliers[TOTAL_FLOORS - 1];
-      const payout = roundBet * finalMult;
-      awardPayout(payout, 'Towers', finalMult, roundBet);
-      setCashedOutInfo({ multiplier: finalMult, payout });
-      setPlaying(false);
-      setResult('win');
-      sound.playCashout();
-      sound.playWin();
-      setActiveGameSession(null);
-      localStorage.removeItem('voidps_towers_state');
-    } else {
-      localStorage.setItem(
-        'voidps_towers_state',
-        JSON.stringify({ difficulty, floor: nextF, traps, userPicks: newPicks, roundBet, playing: true })
-      );
-    }
+  const pickTile = async (fIdx: number, cIdx: number) => {
+    if(!playing || fIdx!==floor || !roundId)return;
+    const resolved=await resolveGameRound(roundId,{floor:fIdx,col:cIdx,columns:cfg.columns,traps:cfg.traps,multipliers:cfg.multipliers});
+    if(!resolved.success||!resolved.result)return;
+    const rr=resolved.result;
+    if(rr.outcome==='loss'){setTraps(Array.isArray(rr.traps)?rr.traps:[]);setDeadPick({floor:fIdx,col:cIdx});setPlaying(false);setResult('loss');setActiveGameSession(null);setRoundId(null);sound.playExplosion();return;}
+    setUserPicks(prev=>[...prev,{floor:fIdx,col:cIdx}]);sound.playGem();setFloor(Number(rr.floor||fIdx+1));
+    if(rr.outcome==='win'){setPlaying(false);setResult('win');setCashedOutInfo({multiplier:Number(rr.multiplier),payout:Number(resolved.payoutDls||0)});setActiveGameSession(null);setRoundId(null);sound.playCashout();sound.playWin();}
   };
 
-  const cashout = () => {
-    if (!playing || floor === 0) return;
-    sound.playClick();
-    sound.playCashout();
-    sound.playWin();
-    const payout = roundBet * currentMultiplier;
-    awardPayout(payout, 'Towers', currentMultiplier, roundBet);
-    setCashedOutInfo({ multiplier: currentMultiplier, payout });
-    setPlaying(false);
-    setResult('win');
-    setActiveGameSession(null);
-    localStorage.removeItem('voidps_towers_state');
+  const cashout = async () => {
+    if(!playing||floor===0||!roundId)return;
+    const resolved=await resolveGameRound(roundId,{cashout:true});
+    if(!resolved.success)return;
+    setPlaying(false);setResult('win');setCashedOutInfo({multiplier:Number(resolved.result?.multiplier||1),payout:Number(resolved.payoutDls||0)});setActiveGameSession(null);setRoundId(null);sound.playCashout();sound.playWin();
   };
 
   const pickRandom = () => {
