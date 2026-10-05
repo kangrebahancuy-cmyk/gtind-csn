@@ -135,7 +135,7 @@ async function createSession(_db,user) {
   return token;
 }
 function sessionCookie(req, token, maxAge=SESSION_TTL_MS/1000) { const secure=String(req.headers['x-forwarded-proto']||'').includes('https') ? '; Secure' : ''; return `gtind_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(maxAge)}${secure}`; }
-function destroySession(req) { const raw=String(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('gtind_session=')); if(raw) deletePersistentSession(decodeURIComponent(raw.slice('gtind_session='.length))); }
+async function destroySession(req) { const raw=String(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('gtind_session=')); if(raw){const token=decodeURIComponent(raw.slice('gtind_session='.length)); const mongo=await getMongoDb(); await mongo.collection('sessions').deleteOne({token});} }
 async function requireAuth(req, res) {
   const user = await sessionUser(req);
   if (!user) { res.status(401).json({ ok: false, error: 'not_authenticated' }); return null; }
