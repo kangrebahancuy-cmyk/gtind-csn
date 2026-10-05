@@ -392,6 +392,42 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     res.json({ok:true,user:publicUser(user)});
   });
 
+  app.get('/api/admin/metrics', async (req,res) => {
+    const admin=await requireAdmin(req,res); if(!admin)return;
+    const mongo=await getMongoDb();
+    const [users,wallets,ledger,withdrawals,deposits,rounds,crashPlayers,caseBattles,sessions] = await Promise.all([
+      mongo.collection('users').countDocuments({}),
+      mongo.collection('wallets').countDocuments({}),
+      mongo.collection('ledger').countDocuments({}),
+      mongo.collection('withdrawals').countDocuments({status:{$in:['PENDING','UNKNOWN']}}),
+      mongo.collection('deposits').countDocuments({status:{$in:['PENDING','UNKNOWN']}}),
+      mongo.collection('gameRounds').countDocuments({status:'ACTIVE'}),
+      mongo.collection('crashPlayers').countDocuments({status:'active'}),
+      mongo.collection('caseBattles').countDocuments({status:'open'}),
+      mongo.collection('sessions').countDocuments({expiresAt:{$gt:new Date()}})
+    ]);
+    res.json({ok:true,metrics:{users,wallets,ledgerEntries:ledger,pendingWithdrawals:withdrawals,pendingDeposits:deposits,activeGameRounds:rounds,activeCrashPlayers:crashPlayers,openCaseBattles:caseBattles,activeSessions:sessions},timestamp:new Date().toISOString()});
+  });
+
+  app.get('/api/admin/reconciliation', async (req,res) => {
+    const admin=await requireAdmin(req,res); if(!admin)return;
+    const mongo=await getMongoDb();
+    const [wallets,ledger] = await Promise.all([
+      mongo.collection('wallets').find({},{projection:{_id:0,userId:1,balanceDls:1}}).toArray(),
+      mongo.collection('ledger').find({},{projection:{_id:0,userId:1,amountDls:1}}).toArray()
+    ]);
+    const sums=new Map();
+    for(const row of ledger) sums.set(String(row.userId),(sums.get(String(row.userId))||0)+Number(row.amountDls||0);
+    const discrepancies=[];
+    for(const wallet of wallets){
+      const actual=Number(wallet.balanceDls||0);
+      const expected=Number((sums.get(String(wallet.userId))||0).toFixed(2));
+      const delta=Number((actual-expected).toFixed(2));
+      if(Math.abs(delta)>0.01) discrepancies.push({userId:wallet.userId,balanceDls:actual,ledgerBalanceDls:expected,deltaDls:delta});
+    }
+    res.json({ok:true,consistent:discrepancies.length===0,checkedWallets:wallets.length,discrepancies,checkedAt:new Date().toISOString()});
+  });
+
   app.get('/api/admin/users', async (req,res) => {
     const admin=await requireAdmin(req,res); if(!admin)return;
     const db=await load();
