@@ -215,7 +215,7 @@ export async function creditGameResult(userId, amount, round) {
     const wallet=await mongo.collection('wallets').findOne({userId},{session});
     const before=Number(wallet?.balanceDls||0);
     if(existing) return {ok:true,balance:before,duplicate:true};
-    if(n<=0) return {ok:true,balance:before};
+    if(n<=0){ if(Number(round?.betDls||0)>0) await recordGameOutcome(session,mongo,{userId,username:user.username,gameId:round.gameId,roundId:round.id,betDls:Number(round.betDls),payoutDls:0}); return {ok:true,balance:before}; }
     const after=Number((before+n).toFixed(2));
     await mongo.collection('wallets').updateOne({userId,balanceDls:before},{$set:{balanceDls:after,updatedAt:new Date()}},{session});
     await mongo.collection('ledger').insertOne({id:id('txn'),userId,username:user.username,type:'GAME_PAYOUT',amountDls:n,balanceBefore:before,balanceAfter:after,referenceId:round.id,metadata:{gameId:round.gameId,multiplier:round.result?.multiplier||0},createdAt:new Date()},{session});
