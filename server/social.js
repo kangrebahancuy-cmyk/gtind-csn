@@ -62,6 +62,33 @@ export async function deleteExpiredChat() {
   return result.deletedCount || 0;
 }
 
+
+export async function getLiveBets(limit = 50) {
+  const db = await getMongoDb();
+  const safeLimit = Math.min(100, Math.max(1, Number(limit) || 50));
+  const rows = await db.collection('ledger')
+    .find({ type: 'BET', currency: 'DL', amountWl: { $lt: 0 } })
+    .sort({ createdAt: -1 })
+    .limit(safeLimit)
+    .toArray();
+  return rows.map((row) => ({
+    id: row.id,
+    userId: row.userId,
+    username: row.username,
+    gameId: row.metadata?.gameId || 'unknown',
+    amountDls: Math.abs(Number(row.amountDls ?? row.amountWl / 100)),
+    createdAt: row.createdAt,
+  }));
+}
+
+export async function getHighRollers(limit = 20) {
+  const bets = await getLiveBets(100);
+  return bets
+    .filter((bet) => bet.amountDls >= 100)
+    .sort((a, b) => b.amountDls - a.amountDls)
+    .slice(0, Math.min(20, Math.max(1, Number(limit) || 20)));
+}
+
 export function installChatRoutes(app, { sessionUser, broadcast }) {
   app.get('/api/social/chat', async (req, res) => {
     const user = await sessionUser(req).catch(() => null);
@@ -73,6 +100,20 @@ export function installChatRoutes(app, { sessionUser, broadcast }) {
     } catch {
       res.status(500).json({ ok: false, error: 'chat_unavailable' });
     }
+  });
+
+  app.get('/api/social/live-bets', async (req, res) => {
+    const user = await sessionUser(req).catch(() => null);
+    if (!user) return res.status(401).json({ ok: false, error: 'not_authenticated' });
+    try { res.json({ ok: true, bets: await getLiveBets(req.query.limit) }); }
+    catch { res.status(500).json({ ok: false, error: 'live_bets_unavailable' }); }
+  });
+
+  app.get('/api/social/high-rollers', async (req, res) => {
+    const user = await sessionUser(req).catch(() => null);
+    if (!user) return res.status(401).json({ ok: false, error: 'not_authenticated' });
+    try { res.json({ ok: true, players: await getHighRollers(req.query.limit) }); }
+    catch { res.status(500).json({ ok: false, error: 'high_rollers_unavailable' }); }
   });
 
   app.post('/api/social/chat', async (req, res) => {
