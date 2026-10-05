@@ -26,12 +26,12 @@ export function levelFromXp(xp){
 }
 export function tierForLevel(level){ return [...TIERS].reverse().find(t=>level>=t.minLevel) || TIERS[0]; }
 function defaultStats(userId){ return {userId,totalGames:0,wins:0,losses:0,wageredDls:0,payoutDls:0,netProfitDls:0,bestWinDls:0,biggestBetDls:0,currentWinStreak:0,bestWinStreak:0,gameCounts:{},gameWins:{},createdAt:new Date(),updatedAt:new Date()}; }
-function defaultProfile(userId,username){ return {userId,username,displayName:username,bio:'',avatarId:'default',public:true,createdAt:new Date(),updatedAt:new Date()}; }
+function defaultProfile(userId,username){ return {userId,username,displayName:username,bio:'',avatarId:'default',adminTag:'',public:true,createdAt:new Date(),updatedAt:new Date()}; }
 export function publicProgression(profile,stats,xp){
   const p=profile||defaultProfile(xp.userId,xp.username||'Player');
   const s=stats||defaultStats(xp.userId);
   const info=levelFromXp(xp.xp||0), tier=tierForLevel(info.level);
-  return {profile:{userId:p.userId,username:p.username,displayName:p.displayName||p.username,bio:p.bio||'',avatarId:p.avatarId||'default',public:p.public!==false},progression:{xp:Number(xp.xp||0),level:info.level,xpIntoLevel:info.xpIntoLevel,xpToNextLevel:info.xpToNextLevel,tier},stats:{totalGames:s.totalGames||0,wins:s.wins||0,losses:s.losses||0,wageredDls:Number(s.wageredDls||0),payoutDls:Number(s.payoutDls||0),netProfitDls:Number(s.netProfitDls||0),bestWinDls:Number(s.bestWinDls||0),biggestBetDls:Number(s.biggestBetDls||0),currentWinStreak:s.currentWinStreak||0,bestWinStreak:s.bestWinStreak||0,gameCounts:s.gameCounts||{},gameWins:s.gameWins||{}},unlockedAvatars:AVATARS.filter(a=>a.unlockLevel<=info.level)};
+  return {profile:{userId:p.userId,username:p.username,displayName:p.displayName||p.username,bio:p.bio||'',avatarId:p.avatarId||'default',adminTag:p.adminTag||'',public:p.public!==false},progression:{xp:Number(xp.xp||0),level:info.level,xpIntoLevel:info.xpIntoLevel,xpToNextLevel:info.xpToNextLevel,tier},stats:{totalGames:s.totalGames||0,wins:s.wins||0,losses:s.losses||0,wageredDls:Number(s.wageredDls||0),payoutDls:Number(s.payoutDls||0),netProfitDls:Number(s.netProfitDls||0),bestWinDls:Number(s.bestWinDls||0),biggestBetDls:Number(s.biggestBetDls||0),currentWinStreak:s.currentWinStreak||0,bestWinStreak:s.bestWinStreak||0,gameCounts:s.gameCounts||{},gameWins:s.gameWins||{}},unlockedAvatars:AVATARS.filter(a=>a.unlockLevel<=info.level)};
 }
 async function ensurePlayerDocs(mongo,user){
   await mongo.collection('profiles').updateOne({userId:user.id},{$setOnInsert:defaultProfile(user.id,user.username),$set:{username:user.username,updatedAt:new Date()}},{upsert:true});
@@ -96,6 +96,17 @@ export function installProgressionRoutes(app,{sessionUser}){
     const user=await sessionUser(req); if(!user)return res.status(401).json({ok:false,error:'not_authenticated'});
     const progression=await updateProfile(user,req.body||{}); if(!progression.ok)return res.status(400).json(progression);
     res.json({ok:true,progression});
+  });
+  app.patch('/api/admin/profile/:username/tag',async(req,res)=>{
+    const admin=await sessionUser(req); if(!admin)return res.status(401).json({ok:false,error:'not_authenticated'});
+    if(!admin.isAdmin)return res.status(403).json({ok:false,error:'admin_required'});
+    const username=String(req.params.username||'').trim().toLowerCase();
+    const tag=String(req.body?.tag||'').trim().slice(0,24);
+    const mongo=await getMongoDb();
+    const user=await mongo.collection('users').findOne({usernameNormalized:username},{projection:{id:1}});
+    if(!user)return res.status(404).json({ok:false,error:'profile_not_found'});
+    await mongo.collection('profiles').updateOne({userId:user.id},{$set:{adminTag:tag,updatedAt:new Date()},$setOnInsert:{...defaultProfile(user.id,req.params.username)}},{upsert:true});
+    return res.json({ok:true,username:req.params.username,adminTag:tag});
   });
   app.get('/api/profile/catalog',async(_req,res)=>res.json({ok:true,avatars:avatarCatalog(),tiers:tierCatalog()}));
 }

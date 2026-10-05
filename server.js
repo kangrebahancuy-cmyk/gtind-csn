@@ -9,6 +9,7 @@ import { installWalletRoutes, debitForGame, creditGameResult } from './server/wa
 import { ensureMongoSchema, pingMongo, closeMongo } from './server/mongo-store.js';
 import { installGameRoutes } from './server/games.js';
 import { installProgressionRoutes } from './server/progression.js';
+import { installChatRoutes, startChatRetentionWorker, saveChatMessage } from './server/social.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -54,9 +55,9 @@ const distPath = path.join(__dirname, 'dist');
 app.use(express.static(distPath));
 
 // In-memory real-time state for live chat & bets & GTPS
-const MAX_HISTORY = 100;
-const liveChatHistory = [];
 const liveBetsHistory = [];
+const stopChatRetentionWorker = startChatRetentionWorker();
+const saveEphemeralChatFromWebSocket = async (user, text) => saveChatMessage({ userId:user.id, username:user.username, message:text });
 const activeBattles = [];
 
 const gtpsConfig = {
@@ -80,6 +81,8 @@ app.get('/api/gtps/status', (req, res) => {
 
 installProgressionRoutes(app, { sessionUser });
 
+installChatRoutes(app, { sessionUser, broadcast });
+
 installWalletRoutes(app, {
   sessionUser,
   getGtpsSecret: () => gtpsConfig.secretKey,
@@ -93,7 +96,19 @@ installEconomyRoutes(app, {
   broadcast,
 });
 
-const installGamesPromise = installGameRoutes(app, { sessionUser, debitForGame, creditGameResult }, { broadcast });
+const installGamesPromise = installGameRoutes(app, {
+  sessionUser,
+  debitForGame: async (...args) => {
+    const result = await debitForGame(...args);
+    if (result?.ok) broadcast({ type: 'LIVE_BET', payload: { referenceId: result.referenceId, gameId: args[2], username: result.username || undefined, amountDls: args[1], timestamp: Date.now() } });
+    return result;
+  },
+  creditGameResult: async (...args) => {
+    const result = await creditGameResult(...args);
+    if (result?.ok && !result.duplicate) broadcast({ type: 'GAME_SETTLED', payload: { userId: args[0], amountDls: args[1], gameId: args[2]?.gameId || 'unknown', timestamp: Date.now() } });
+    return result;
+  }
+}, { broadcast });
 
 // Real-Time WebSocket Server
 const wss = new WebSocketServer({ server, path: '/ws' });
@@ -113,11 +128,15 @@ wss.on('connection', async (ws, req) => {
     ws.close(1008, 'authentication_required');
     return;
   }
+  if (user.isBanned) {
+    ws.close(1008, 'account_banned');
+    return;
+  }
 
   ws.send(JSON.stringify({
     type: 'INIT_STATE',
     payload: {
-      chatHistory: liveChatHistory.slice(-50),
+      chatHistory: [],
       liveBets: liveBetsHistory.slice(0, 30),
       activeBattles: activeBattles.filter((b) => b.status === 'open'),
     },
@@ -133,6 +152,11 @@ wss.on('connection', async (ws, req) => {
         return;
       }
 
+      if (user.isMuted) {
+        ws.send(JSON.stringify({ type:'ERROR', payload:{ error:'account_muted' } }));
+        return;
+      }
+
       const incoming = message.payload && typeof message.payload === 'object' ? message.payload : {};
       const text = String(incoming.message || incoming.text || '').trim().slice(0, 500);
       if (!text) return;
@@ -144,9 +168,8 @@ wss.on('connection', async (ws, req) => {
         message: text,
         createdAt: new Date().toISOString(),
       };
-      liveChatHistory.push(chatItem);
-      if (liveChatHistory.length > MAX_HISTORY) liveChatHistory.shift();
-      broadcast({ type: 'CHAT_MESSAGE', payload: chatItem });
+      saveEphemeralChatFromWebSocket(user, text).catch((error) => console.error('[Social] WS chat persistence failed:', error));
+      broadcast({ type: 'CHAT_MESSAGE', payload: { ...chatItem, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() } });
     } catch (err) {
       console.error('WS parse error:', err);
     }
@@ -158,7 +181,7 @@ app.use((req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
 
-const shutdown = (signal) => { console.log(`[Supreme Casino] ${signal} received; shutting down`); server.close(async () => { await closeMongo().catch(()=>{}); process.exit(0); }); setTimeout(() => process.exit(1), 10000).unref(); };
+const shutdown = (signal) => { console.log(`[Supreme Casino] ${signal} received; shutting down`); stopChatRetentionWorker(); server.close(async () => { await closeMongo().catch(()=>{}); process.exit(0); }); setTimeout(() => process.exit(1), 10000).unref(); };
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
