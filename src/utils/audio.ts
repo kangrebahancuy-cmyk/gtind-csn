@@ -322,6 +322,23 @@ class SoundController {
       osc2.stop(now + 0.35);
     } catch {}
   }
+  // Alias untuk pemanggilan yang ada di komponen tapi tidak punya method
+  // (mencegah TypeError "sound.playX is not a function" saat gameplay)
+  public playSuccess() {
+    this.playWin();
+  }
+
+  public playGemChime() {
+    this.playGem();
+  }
+
+  public playCaseRoll() {
+    this.playCaseTick();
+  }
+
+  public playSuspenseTick() {
+    this.playTick();
+  }
 }
 
 export const sound = new SoundController();

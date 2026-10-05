@@ -55,6 +55,45 @@ export const WalletModal: React.FC = () => {
   const [tipNote, setTipNote] = useState<string>('');
   const [tipMsg, setTipMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // NOTE: Semua hooks WAJIB dipanggil sebelum `if (!walletModalOpen) return null`.
+  // Kalau useEffect ada di bawah early-return, jumlah hooks berubah antar render
+  // -> React error #310 -> seluruh app crash (layar hitam saat buka wallet).
+  const userLinkCode = user.linkCode || '839201';
+
+  // Automatically register and sync verification code with backend & GTPS bridge
+  useEffect(() => {
+    if (!walletModalOpen || !userLinkCode) return;
+    fetch('/api/gtps/register-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: user.username,
+        code: userLinkCode,
+        growId: user.growId || null,
+      }),
+    }).catch(() => {});
+  }, [walletModalOpen, userLinkCode, user.username, user.growId]);
+
+  // Real-time poller: Automatically detect when player runs /link in GTPS
+  useEffect(() => {
+    if (!walletModalOpen || walletTab !== 'link' || user.growId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/gtps/check-link?code=${encodeURIComponent(userLinkCode)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.linked && data.growId) {
+            updateUserGrowId(data.growId);
+            sound.playSuccess();
+          }
+        }
+      } catch {}
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [walletModalOpen, walletTab, userLinkCode, user.growId, updateUserGrowId, sound]);
+
   if (!walletModalOpen) return null;
 
   const handleCopy = (text: string, fieldId: string) => {
@@ -106,42 +145,6 @@ export const WalletModal: React.FC = () => {
       setTipMsg({ type: 'error', text: res.message });
     }
   };
-
-  const userLinkCode = user.linkCode || '839201';
-
-  // Automatically register and sync verification code with backend & GTPS bridge
-  useEffect(() => {
-    if (!walletModalOpen || !userLinkCode) return;
-    fetch('/api/gtps/register-code', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        username: user.username,
-        code: userLinkCode,
-        growId: user.growId || null,
-      }),
-    }).catch(() => {});
-  }, [walletModalOpen, userLinkCode, user.username, user.growId]);
-
-  // Real-time poller: Automatically detect when player runs /link in GTPS
-  useEffect(() => {
-    if (!walletModalOpen || walletTab !== 'link' || user.growId) return;
-
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/gtps/check-link?code=${encodeURIComponent(userLinkCode)}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.linked && data.growId) {
-            updateUserGrowId(data.growId);
-            sound.playSuccess();
-          }
-        }
-      } catch {}
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, [walletModalOpen, walletTab, userLinkCode, user.growId, updateUserGrowId, sound]);
 
   return (
     <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
