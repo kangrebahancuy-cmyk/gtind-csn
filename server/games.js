@@ -76,10 +76,10 @@ export function installGameRoutes(app, economy) {
   app.delete('/api/games/cases/catalog/:id',(req,res)=>{const user=requireUser(req,res);if(!user)return;if(!user.isAdmin)return res.status(403).json({ok:false,error:'admin_required'});caseCatalog.delete(String(req.params.id));persistCases();res.json({ok:true});});
   app.get('/api/games/case-battles/lobby', (req,res) => {
     const battles=[...caseBattles.values()]
-      .filter(b=>b.status==='open')
+      .filter(b=>Date.now()-b.createdAt < 10*60*1000)
       .sort((a,b)=>b.createdAt-a.createdAt)
       .slice(0,100)
-      .map(publicCaseBattle);
+      .map(b=>publicCaseBattle(b,true));
     res.json({ok:true,battles});
   });
 
@@ -122,7 +122,13 @@ export function installGameRoutes(app, economy) {
     battle.result=result;
     const payout=Number(result.payout||0);
     const settlementRound={id:battle.id,gameId:'case-battle-pvp',result};
-    if(payout>0){
+    if(result.outcome==='draw'){
+      for(const player of battle.players){
+        const refund=economy.creditGameResult(player.userId,battle.totalCostPerPlayer,settlementRound);
+        if(!refund.ok){battle.status='settlement_failed';persistCaseBattles();return res.status(500).json({ok:false,error:'settlement_failed'});}
+      }
+      battle.payoutDls=battle.totalCostPerPlayer*2;
+    } else if(payout>0){
       const credit=economy.creditGameResult(result.winnerUserId,payout,settlementRound);
       if(!credit.ok){battle.status='settlement_failed';persistCaseBattles();return res.status(500).json({ok:false,error:'settlement_failed'});}
       battle.payoutDls=payout;
@@ -154,6 +160,7 @@ export function installGameRoutes(app, economy) {
     const gameId=String(req.body?.gameId||'').trim().toLowerCase();
     const betDls=Number(req.body?.betDls);
     if (!SERVER_AUTH_GAMES.has(gameId)) return res.status(409).json({ok:false,error:'game_not_server_authoritative'});
+    if (gameId==='case-battles') return res.status(410).json({ok:false,error:'use_case_battles_pvp_endpoint'});
     if (!gameId || !Number.isFinite(betDls) || betDls<=0 || betDls>100000000) return res.status(400).json({ok:false,error:'invalid_bet'});
     if(gameId==='cases'){const c=caseCatalog.get(String(req.body?.caseId||''));const count=Math.max(1,Math.min(4,Number(req.body?.count)||1));if(!c)return res.status(400).json({ok:false,error:'case_not_found'});if(Math.abs(c.price*count-betDls)>0.01)return res.status(400).json({ok:false,error:'case_price_mismatch'});}
     if(gameId==='case-battles'){const ids=Array.isArray(req.body?.caseIds)?req.body.caseIds.map(String):[String(req.body?.caseId||'')];const cs=ids.map(id=>caseCatalog.get(id));if(!cs.length||cs.some(c=>!c))return res.status(400).json({ok:false,error:'case_not_found'});const total=cs.reduce((n,c)=>n+Number(c.price||0),0);if(Math.abs(total-betDls)>0.01)return res.status(400).json({ok:false,error:'battle_price_mismatch'});}
