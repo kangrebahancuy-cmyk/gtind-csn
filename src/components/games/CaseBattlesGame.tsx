@@ -262,7 +262,7 @@ export const CaseBattlesGame: React.FC<{ onBack: () => void }> = ({ onBack }) =>
     }
     if (!checkCanPlayGame('casebattles', 'Case Battles')) return;
     if (totalBattleCost <= 0) return;
-    const start=await fetch('/api/games/start',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({gameId:'case-battles',betDls:totalBattleCost,caseId:orderedSelectedCases[0]?.id})}).then(r=>r.json()).catch(()=>null);
+    const start=await fetch('/api/games/start',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({gameId:'case-battles',betDls:totalBattleCost,caseIds:orderedSelectedCases.map(c=>c.id)})}).then(r=>r.json()).catch(()=>null);
     if(!start?.ok||!start.roundId){showToast(start?.error||'Server battle unavailable','error','Case Battles');return;}
     const resolved=await fetch('/api/games/resolve',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({roundId:start.roundId,action:{final:true}})}).then(r=>r.json()).catch(()=>null);
     if(!resolved?.ok){showToast(resolved?.error||'Battle settlement failed','error','Case Battles');return;}
