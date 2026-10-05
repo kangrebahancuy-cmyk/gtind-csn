@@ -88,7 +88,7 @@ function mutateBalance(db, user, delta, type, referenceId, metadata = {}) {
   createTransaction(db, user, type, delta, before, after, referenceId, metadata);
   return after;
 }
-function sessionUser(req) {
+export function sessionUser(req) {
   const token = String(req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('gtind_session='));
   const value = token ? decodeURIComponent(token.slice('gtind_session='.length)) : '';
   if (!value) return null;
@@ -133,6 +133,25 @@ export function unlinkGrowId(growId) {
   user.gtpsLinked = false;
   save(db);
   return publicUser(user);
+}
+
+export function debitForGame(userId, amount, gameId) {
+  const db=load(); const user=db.users.find(u=>u.id===userId);
+  if(!user) return {ok:false,error:'user_not_found'};
+  const n=Number(amount);
+  if(!Number.isFinite(n)||n<=0||user.balanceDls<n) return {ok:false,error:'insufficient_balance'};
+  const ref=id('bet');
+  mutateBalance(db,user,-n,'BET',ref,{gameId});
+  save(db);
+  return {ok:true,balance:user.balanceDls,referenceId:ref};
+}
+export function creditGameResult(userId, amount, round) {
+  const db=load(); const user=db.users.find(u=>u.id===userId);
+  if(!user) return {ok:false};
+  const n=Number(amount||0);
+  if(n>0) mutateBalance(db,user,n,'GAME_PAYOUT',round.id,{gameId:round.gameId,multiplier:round.result?.multiplier||0});
+  save(db);
+  return {ok:true,balance:user.balanceDls};
 }
 
 export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadcast }) {
