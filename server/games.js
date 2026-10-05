@@ -172,6 +172,7 @@ function resolveCashout(round, action) {
 }
 
 function resolveCrash(round,action){
+  if(action.type==='cancel')return {outcome:'cancelled',current:1,multiplier:1,payout:round.betDls};
   const elapsed=Math.max(0,(Date.now()-Number(round.state?.startedAt||Date.now()))/1000);
   const current=Number(Math.max(1,Math.exp(0.065*elapsed*1.5)).toFixed(2));
   const crashPoint=Number(round.state?.crashPoint||1);
