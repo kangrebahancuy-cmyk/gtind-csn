@@ -78,6 +78,7 @@ export function installGameRoutes(app, economy) {
     const random=rng(round.serverSeed + ':' + round.clientSeed + ':' + round.nonce + ':' + step);
     const result=(round.gameId==='coinflip' && action.cashout===true) ? resolveCashout(round, action) : resolveGame(round.gameId,random,action,round.betDls);
     const payout=Number((result.payout||0).toFixed(2));
+    if (payout < 0 || payout > round.betDls * 100000) return res.status(400).json({ok:false,error:'invalid_payout'});
     const shouldCredit=action.cashout===true || action.final===true || !['coinflip'].includes(round.gameId);
     let credit={ok:true,balance:round.balanceAfterBet};
     if(shouldCredit){
@@ -100,15 +101,19 @@ function resolveCashout(round, action) {
 function resolveGame(gameId,r,action,bet) {
   switch(gameId) {
     case 'coinflip': {
-      const win=r()<0.5; const choice=action.choice||'heads'; const step=Math.max(0,Number(action.step)||0); const mults=[1.92,3.84,7.68,15.36,30.72,61.44,122.88,245.76,491.52]; const multiplier=mults[Math.min(step,mults.length-1)]||1.92; const cashout=action.cashout===true; const payout=action.final&&win?bet*multiplier:(cashout?bet*(step>0?mults[Math.min(step-1,mults.length-1)]:1):0); return { outcome:win?'win':'loss', choice, winningSide:win?choice:(choice==='heads'?'tails':'heads'), step, multiplier:win?multiplier:0, payout:win?lossPayout:payout, cashedOut:cashout&&win };
+      const win=r()<0.5; const choice=action.choice||'heads'; const step=Math.max(0,Number(action.step)||0); const mults=[1.92,3.84,7.68,15.36,30.72,61.44,122.88,245.76,491.52]; const multiplier=mults[Math.min(step,mults.length-1)]||1.92; const cashout=action.cashout===true; const payout=action.final&&win?bet*multiplier:(cashout?bet*(step>0?mults[Math.min(step-1,mults.length-1)]:1):0); return { outcome:win?'win':'loss', choice, winningSide:win?choice:(choice==='heads'?'tails':'heads'), step, multiplier:win?multiplier:0, payout, cashedOut:cashout&&win };
     }
     case 'roulette': {
-      const n=Math.floor(r()*37); const choice=String(action.choice??'0'); let win=false;
-      if(action.type==='color') win=(choice==='red'&&isRed(n))||(choice==='black'&&isBlack(n));
-      else if(action.type==='evenOdd') win=n!==0&&((choice==='even'&&n%2===0)||(choice==='odd'&&n%2===1));
-      else win=Number(choice)===n;
-      const multiplier=action.type==='color'?1.96:action.type==='evenOdd'?1.96:35;
-      return {winningNumber:n,outcome:win?'win':'loss',multiplier:payoutMul(win,multiplier),payout:win?bet*multiplier:0};
+      const n=Math.floor(r()*37); const bets=action.bets && typeof action.bets==='object'?action.bets:{};
+      let payout=0; const color=isRed(n)?'red':n===0?'green':'black';
+      const add=(key,m)=>{const a=Number(bets[key]||0);if(Number.isFinite(a)&&a>0)payout+=a*m;};
+      add(`num_${n}`,36);
+      if(n>=1&&n<=12)add('1st_12',3); else if(n<=24&&n>=13)add('2nd_12',3); else if(n>=25)add('3rd_12',3);
+      if(n>0){ if(n%3===1)add('col_1',3); if(n%3===2)add('col_2',3); if(n%3===0)add('col_3',3); }
+      if(color==='red')add('red',2); if(color==='black')add('black',2);
+      if(n>0&&n%2===0)add('even',2); if(n>0&&n%2===1)add('odd',2);
+      if(n>=1&&n<=18)add('1_to_18',2); if(n>=19&&n<=36)add('19_to_36',2);
+      return {winningNumber:n,color,outcome:payout>0?'win':'loss',payout,multiplier:bet?payout/bet:0};
     }
     case 'keno': {
       const pool=Array.from({length:40},(_,i)=>i+1); const drawn=[];
@@ -123,6 +128,8 @@ function resolveGame(gameId,r,action,bet) {
       return {roll,target,condition:over?'over':'under',outcome:win?'win':'loss',multiplier:win?m:0,payout:win?bet*m:0};
     }
     case 'cases': {
+      return {outcome:'unsupported',payout:0,error:'case_catalog_must_be_server_owned'};
+      /*
       const items=Array.isArray(action.items)?action.items:[]; if(!items.length) return {outcome:'loss',payout:0};
       const total=items.reduce((n,x)=>n+Math.max(0,Number(x.chance||0)),0); let x=r()*total, chosen=items[items.length-1];
       for(const item of items){x-=Math.max(0,Number(item.chance||0));if(x<=0){chosen=item;break;}}
