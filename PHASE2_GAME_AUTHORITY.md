@@ -34,8 +34,12 @@ The server rejects any game ID outside this whitelist. The migrated frontend gam
 Important:
 - Game configuration and payout tables used for settlement are server-owned.
 - Cases use a server-owned case catalog in `data/cases.json`.
-- Roulette validates the submitted stake against the amount debited in DLS.
-- Crash settlement uses server-side elapsed time and crash point.
+- Roulette validates the submitted stake against the amount debited in DLS and rejects unknown bet keys.
+- Towers accepts only a named server-owned difficulty configuration; columns, traps, and multipliers are derived server-side.
+- Case Battle publishes the full two-player pot after the second stake is locked.
+- Crash settlement uses server-side elapsed time and a server-seed-derived crash point; the seed hash is public before the round and the seed is revealed after the round.
+- Crash global state persists round seed/hash, timing, and player stakes so a process restart can recover the active round instead of silently losing locked wagers.
+- Crash point is capped at 10,000x and uses a deterministic HMAC-SHA256 derivation.
 - Case Battle 1v1 PvP matchmaking is server-authoritative: creator stake is locked, opponent stake is locked on join, both players use the same server-owned battle seed, and winner/tie settlement is server-side. Bots are disabled.
 - Economy persistence now uses a file-backed SQLite store (`data/economy.sqlite`) with WAL, FULL synchronous durability, and optimistic version checks. The previous `data/economy.json` is imported automatically on first startup when present.
 
@@ -43,7 +47,7 @@ Important:
 - Added GitHub Actions CI for Vite build and Node syntax checks.
 - Game payout settlement is idempotent by round ID in the economy ledger.
 - Economy writes use SQLite transactions and optimistic version checks to reject stale concurrent writes.
-- Regression tests cover deterministic RNG, Blackjack deck/scoring, Mines, Roulette, Keno, and Crash.
+- Regression tests cover deterministic RNG, Crash seed derivation/cap, Blackjack deck/scoring, Mines, Towers, Roulette (including unknown-key rejection), Keno, and Crash.
 
 ## Production requirement
 Phase 2 game authority now has transactional local persistence and concurrency conflict detection for the economy. High-value production still requires a deployment with durable shared storage (not ephemeral/serverless disk) and the true shared Crash/PvP services described below.
