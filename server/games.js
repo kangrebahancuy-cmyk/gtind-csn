@@ -86,6 +86,7 @@ export function installGameRoutes(app, economy) {
       if(!credit.ok) return res.status(500).json({ok:false,error:'credit_failed'});
       round.status='RESOLVED'; round.payoutDls=payout; round.resolvedAt=new Date().toISOString();
     }
+    if (['mines','towers'].includes(round.gameId) && result.continue) { round.state=result.state; }
     round.lastStep=step; round.result=result; persist();
     res.json({ok:true,roundId:round.id,result,payoutDls:payout,balanceDls:credit.balance,finished:shouldCredit,serverSeed:shouldCredit?round.serverSeed:undefined,serverSeedHash:round.serverSeedHash,clientSeed:round.clientSeed,nonce:round.nonce});
   });
@@ -100,6 +101,30 @@ function resolveCashout(round, action) {
 
 function resolveGame(gameId,r,action,bet) {
   switch(gameId) {
+    case 'mines': {
+      const size=Math.max(2,Math.min(8,Number(action.gridSize)||5)); const total=size*size; const mineCount=Math.max(1,Math.min(total-1,Number(action.mines)||3));
+      const selected=Number(action.selected); const prior=Array.isArray(action.revealed)?action.revealed.map(Number):[];
+      const key=hash('mines:'+size+':'+mineCount+':'+bet+':'+Math.floor(r()*0xffffffff));
+      const rr=rng(key); const mineSet=new Set(); while(mineSet.size<mineCount) mineSet.add(Math.floor(rr()*total));
+      const revealed=[...new Set(prior)].filter(n=>n>=0&&n<total);
+      if(!Number.isInteger(selected)||selected<0||selected>=total||revealed.includes(selected)) return {outcome:'invalid',payout:0,error:'invalid_tile'};
+      const isMine=mineSet.has(selected); const next=[...revealed,selected]; const safeCount=next.filter(n=>!mineSet.has(n)).length;
+      const prob=Array.from({length:safeCount},(_,i)=>(total-mineCount-i)/(total-i)).reduce((a,b)=>a*b,1);
+      const multiplier=safeCount?Math.max(1.01,Number((0.99/prob).toFixed(2))):1;
+      if(isMine) return {outcome:'loss',explodedTile:selected,mineMap:[...mineSet],multiplier:0,payout:0,continue:false};
+      if(safeCount===total-mineCount) return {outcome:'win',safeCount,mineMap:[...mineSet],multiplier,payout:bet*multiplier,continue:false};
+      return {outcome:'safe',safeCount,mineMap:[],multiplier,payout:0,continue:true,state:{size,mineCount,revealed:next,mineMap:[...mineSet]}};
+    }
+    case 'towers': {
+      const cols=Math.max(2,Math.min(4,Number(action.columns)||4)); const traps=Math.max(1,Math.min(cols-1,Number(action.traps)||1)); const floor=Math.max(0,Number(action.floor)||0);
+      const rr=rng('tower:'+Math.floor(r()*0xffffffff)+':'+cols+':'+traps); const generated=Array.from({length:8},()=>{const set=new Set();while(set.size<traps)set.add(Math.floor(rr()*cols));return [...set];});
+      const col=Number(action.col); if(!Number.isInteger(col)||col<0||col>=cols||floor>7)return {outcome:'invalid',payout:0,error:'invalid_tile'};
+      const isTrap=generated[floor].includes(col); const multipliers=action.multipliers&&Array.isArray(action.multipliers)?action.multipliers.map(Number):[1.28,1.65,2.15,2.8,3.65,4.8,6.3,8.3];
+      if(isTrap)return {outcome:'loss',floor,col,traps:generated,payout:0,continue:false};
+      const nextFloor=floor+1; const multiplier=multipliers[Math.min(nextFloor-1,multipliers.length-1)]||1;
+      if(nextFloor>=8)return {outcome:'win',floor:nextFloor,traps:generated,multiplier,payout:bet*multiplier,continue:false};
+      return {outcome:'safe',floor:nextFloor,traps:[],multiplier,payout:0,continue:true,state:{floor:nextFloor,traps:generated}};
+    }
     case 'coinflip': {
       const win=r()<0.5; const choice=action.choice||'heads'; const step=Math.max(0,Number(action.step)||0); const mults=[1.92,3.84,7.68,15.36,30.72,61.44,122.88,245.76,491.52]; const multiplier=mults[Math.min(step,mults.length-1)]||1.92; const cashout=action.cashout===true; const payout=action.final&&win?bet*multiplier:(cashout?bet*(step>0?mults[Math.min(step-1,mults.length-1)]:1):0); return { outcome:win?'win':'loss', choice, winningSide:win?choice:(choice==='heads'?'tails':'heads'), step, multiplier:win?multiplier:0, payout, cashedOut:cashout&&win };
     }
