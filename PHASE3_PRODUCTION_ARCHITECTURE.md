@@ -1,50 +1,40 @@
-# GTIND-CSN Phase 3 — Production Architecture
+# GTIND-CSN Phase 3 — MongoDB Atlas
 
-**Status: IN PROGRESS — core hardening implemented; shared PostgreSQL/Redis migration remains.**
+Status: **MIGRATION FOUNDATION COMPLETE — production cutover still requires Atlas credentials and async runtime migration.**
 
-## Completed in this phase
+MongoDB Atlas is now the selected production persistence target. The repository contains the Atlas connection manager, schema/indexes, initialization command, and an idempotent migration path for the existing JSON/SQLite data.
 
-- Authentication sessions moved from process memory to persistent SQLite storage.
-- Session lookup, expiry and deletion are database-backed.
-- WebSocket clients can no longer inject LIVE_BET or Case Battle realtime events.
-- JSON request body size is limited to 64 KiB.
-- Express X-Powered-By header is disabled.
-- SIGINT/SIGTERM graceful shutdown was added.
-- Regression coverage includes persistent session creation, lookup and deletion.
-- Crash state remains persisted across process restarts.
-- Withdrawals now support an `Idempotency-Key` and include the withdrawal ID when calling the GTPS bridge.
-- A bridge/network uncertainty no longer triggers an automatic refund; the withdrawal becomes `UNKNOWN` and requires reconciliation.
-- Admins can list and reconcile `PENDING`/`UNKNOWN` withdrawals as `complete` or `fail_refund`.
-- Security response headers, request IDs, JSON body limits, readiness checks, and graceful shutdown are enabled.
-- Case Battle state remains persisted and server-authoritative.
+## Environment
 
-## Architecture target
+MONGODB_URI=mongodb+srv://username:password@cluster.example.mongodb.net/?retryWrites=true&w=majority
+MONGODB_DB=gtind_csn
+MONGODB_MAX_POOL_SIZE=50
+MONGODB_SERVER_SELECTION_TIMEOUT_MS=5000
 
-Phase 3 is intended to make the casino safe for a persistent VM/bare-metal deployment and prepare it for shared multi-instance deployment.
+Never commit credentials.
 
-Current durable local storage:
-- SQLite economy database
-- SQLite persistent sessions
-- JSON round/case/Crash/Case Battle state
+## Collections
 
-Target shared production storage:
-- PostgreSQL for users, wallets, ledger, rounds and withdrawals
-- Redis for distributed locks, Crash room state and pub/sub
-- Idempotency keys on all money-moving endpoints
-- Transactional wallet ledger with database constraints
-- Centralized realtime event publication
+users, sessions, wallets, ledger, deposits, withdrawals, gameRounds, caseCatalog, caseBattles, crashRounds, crashPlayers, auditLogs, realtimeEvents.
 
-## Remaining Phase 3 work
+## Commands
 
-1. Replace JSON game/Crash/Case Battle state with transactional database tables.
-2. Add database-level wallet locking and idempotency constraints.
-3. Add distributed locking for Crash betting/cashout and Case Battle joins.
-4. Add withdrawal state machine with durable retry/reconciliation.
-5. Add server-generated realtime betting/battle feeds only.
-6. Add security headers, request correlation IDs and structured audit logs.
-7. Add readiness/liveness checks for deployment.
-8. Execute CI/build/test against the final production snapshot.
+npm install
+npm run mongo:init
+npm run mongo:migrate
 
-## Important deployment constraint
+The migration is idempotent and uses MongoDB transactions for the account/wallet/ledger/deposit/withdrawal import.
 
-The current implementation is durable on a single persistent server. It is **not yet safe for multiple independent server instances sharing no common database**. Do not run multiple casino instances until the shared PostgreSQL/Redis stage is completed.
+## Production cutover requirements
+
+The existing economy and game HTTP handlers are synchronous and currently use the SQLite/JSON storage layer. The official MongoDB Node.js driver is asynchronous, so replacing that layer correctly requires making the money-moving request path asynchronous rather than blocking the Node.js event loop.
+
+Do not claim the casino is MongoDB-backed in production until:
+1. economy routes use Atlas as source of truth;
+2. game round, Crash, and Case Battle mutations use Atlas;
+3. wallet changes and ledger writes are performed in MongoDB transactions;
+4. settlement references are protected by unique indexes;
+5. Crash/Case Battle room ownership uses atomic MongoDB updates or a distributed lock;
+6. the final CI run executes install, build, syntax checks and tests.
+
+MongoDB supports ACID multi-document transactions through the official Node.js driver.
