@@ -26,3 +26,22 @@ Do not accept real-value wagers on an un-migrated game. Phase 2 is intentionally
 
 ## Next
 Migrate Roulette, Mines, Towers, Keno, Blackjack, Cases, Case Battles, Crash and remaining legacy games one by one, with server-side game state and settlement tests.
+
+
+## Current migration status (updated)
+Server-authoritative real-value rounds are currently enabled only for:
+- Coinflip
+- Mines
+- Towers
+- Roulette
+- Keno
+- Dice
+
+The server rejects round creation for games that have not been migrated yet. This is intentional: Blackjack, Cases, Case Battles, Crash, and any legacy/orphaned game must not accept real-value bets until their complete server state machine is implemented.
+
+Important:
+- Cases must use a server-owned case catalog; client-supplied item/chance lists are rejected.
+- Crash requires an authoritative shared server round before real-value betting is enabled.
+- Blackjack requires server-owned deck/state/actions.
+- Case Battles requires server-owned lobby, participants, case catalog, RNG, winner and settlement.
+- The current file-backed round/economy store still requires persistent storage and stronger transactional locking before production/high-value use.
