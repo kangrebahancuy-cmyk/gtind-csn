@@ -527,94 +527,58 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [currentUser?.username, currentUser?.linkCode, currentUser?.growId]);
 
   // Admin Controls
-  const adminAddBalance = (username: string, amountDls: number): boolean => {
-    setAccounts((prev) => {
-      const updated = prev.map((a) => {
-        if (a.username.toLowerCase() === username.toLowerCase()) {
-          const newBal = Number(((a.balanceDls || 0) + amountDls).toFixed(2));
-          return { ...a, balanceDls: newBal };
-        }
-        return a;
+  const adminAddBalance = async (username: string, amountDls: number): Promise<boolean> => {
+    if (!currentUser?.isAdmin || amountDls <= 0) return false;
+    try {
+      const { response, data } = await apiJson('/api/admin/balance', {
+        method:'POST', body:JSON.stringify({ username, amountDls, mode:'add' })
       });
-      try {
-        localStorage.setItem('supreme_registered_accounts', JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
-
-    if (currentUser && currentUser.username.toLowerCase() === username.toLowerCase()) {
-      const newBal = Number(((currentUser.balanceDls || 0) + amountDls).toFixed(2));
-      const updatedSession = { ...currentUser, balanceDls: newBal };
-      setCurrentUser(updatedSession);
-      try {
-        localStorage.setItem('supreme_active_session', JSON.stringify(updatedSession));
-      } catch {}
-      triggerBalanceGain(amountDls);
-    }
-    return true;
+      if (!response.ok) return false;
+      setAccounts(prev => prev.map(acc => acc.username.toLowerCase() === username.toLowerCase() ? data.user : acc));
+      if (data.user?.username?.toLowerCase() === currentUser.username.toLowerCase()) {
+        setCurrentUser(data.user); currentUserRef.current = data.user; triggerBalanceGain(amountDls);
+      }
+      return true;
+    } catch { return false; }
   };
 
-  const adminRemoveBalance = (username: string, amountDls: number): boolean => {
-    setAccounts((prev) => {
-      const updated = prev.map((a) => {
-        if (a.username.toLowerCase() === username.toLowerCase()) {
-          const newBal = Number(Math.max(0, (a.balanceDls || 0) - amountDls).toFixed(2));
-          return { ...a, balanceDls: newBal };
-        }
-        return a;
+  const adminRemoveBalance = async (username: string, amountDls: number): Promise<boolean> => {
+    if (!currentUser?.isAdmin || amountDls <= 0) return false;
+    try {
+      const { response, data } = await apiJson('/api/admin/balance', {
+        method:'POST', body:JSON.stringify({ username, amountDls, mode:'remove' })
       });
-      try {
-        localStorage.setItem('supreme_registered_accounts', JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
-
-    if (currentUser && currentUser.username.toLowerCase() === username.toLowerCase()) {
-      const newBal = Number(Math.max(0, (currentUser.balanceDls || 0) - amountDls).toFixed(2));
-      const updatedSession = { ...currentUser, balanceDls: newBal };
-      setCurrentUser(updatedSession);
-      try {
-        localStorage.setItem('supreme_active_session', JSON.stringify(updatedSession));
-      } catch {}
-    }
-    return true;
+      if (!response.ok) return false;
+      setAccounts(prev => prev.map(acc => acc.username.toLowerCase() === username.toLowerCase() ? data.user : acc));
+      if (data.user?.username?.toLowerCase() === currentUser.username.toLowerCase()) {
+        setCurrentUser(data.user); currentUserRef.current = data.user;
+      }
+      return true;
+    } catch { return false; }
   };
 
-  const adminToggleBan = (username: string): boolean => {
-    setAccounts((prev) => {
-      const updated = prev.map((a) => {
-        if (a.username.toLowerCase() === username.toLowerCase()) {
-          return { ...a, isBanned: !a.isBanned };
-        }
-        return a;
+  const adminToggleBan = async (username: string): Promise<boolean> => {
+    if (!currentUser?.isAdmin) return false;
+    try {
+      const { response, data } = await apiJson('/api/admin/status', {
+        method:'POST', body:JSON.stringify({ username, field:'isBanned' })
       });
-      try {
-        localStorage.setItem('supreme_registered_accounts', JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
-
-    if (currentUser && currentUser.username.toLowerCase() === username.toLowerCase()) {
-      logout();
-      showToast('Your account was banned by an administrator.', 'error', 'Account Banned');
-    }
-    return true;
+      if (!response.ok) return false;
+      setAccounts(prev => prev.map(acc => acc.username.toLowerCase() === username.toLowerCase() ? data.user : acc));
+      return true;
+    } catch { return false; }
   };
 
-  const adminToggleMute = (username: string): boolean => {
-    setAccounts((prev) => {
-      const updated = prev.map((a) => {
-        if (a.username.toLowerCase() === username.toLowerCase()) {
-          return { ...a, isMuted: !a.isMuted };
-        }
-        return a;
+  const adminToggleMute = async (username: string): Promise<boolean> => {
+    if (!currentUser?.isAdmin) return false;
+    try {
+      const { response, data } = await apiJson('/api/admin/status', {
+        method:'POST', body:JSON.stringify({ username, field:'isMuted' })
       });
-      try {
-        localStorage.setItem('supreme_registered_accounts', JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
-    return true;
+      if (!response.ok) return false;
+      setAccounts(prev => prev.map(acc => acc.username.toLowerCase() === username.toLowerCase() ? data.user : acc));
+      return true;
+    } catch { return false; }
   };
 
   // Corner Toast Notifications state
