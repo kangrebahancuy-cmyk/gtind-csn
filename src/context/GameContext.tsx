@@ -1072,8 +1072,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
           // Check if active user busted
           if (userBetRef.current && userBetRef.current.status === 'active') {
-            setUserCrashBet({ ...userBetRef.current, status: 'busted' });
-            recordLoss(userBetRef.current.amountDls, 'Crash');
+            const rb=userBetRef.current;
+            if(rb.roundId) fetch('/api/games/resolve',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({roundId:rb.roundId,action:{type:'tick'}})}).then(()=>{});
+            setUserCrashBet({ ...rb, status: 'busted' });
             sound.playExplosion();
           }
 
@@ -1090,11 +1091,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // Check user auto-cashout
           if (userBetRef.current && userBetRef.current.status === 'active') {
             if (userBetRef.current.autoCashout > 1.01 && mult >= userBetRef.current.autoCashout) {
-              const wonAmount = userBetRef.current.amountDls * userBetRef.current.autoCashout;
-              awardPayout(wonAmount, 'Crash', userBetRef.current.autoCashout, userBetRef.current.amountDls);
-              setUserCrashBet({ ...userBetRef.current, status: 'cashed', cashedAt: userBetRef.current.autoCashout });
-              sound.playCashout();
-              sound.playWin();
+              const rb=userBetRef.current;
+              if(rb.roundId) fetch('/api/games/resolve',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({roundId:rb.roundId,action:{type:'cashout'}})}).then(r=>r.json()).then(d=>{if(d?.ok&&d.result?.outcome==='win'){setUserCrashBet({...rb,status:'cashed',cashedAt:Number(d.result.current||rb.autoCashout)});setCurrentUser(prev=>prev?{...prev,balanceDls:Number(d.balanceDls??prev.balanceDls)}:prev);sound.playCashout();sound.playWin();}});
             }
           }
         }
