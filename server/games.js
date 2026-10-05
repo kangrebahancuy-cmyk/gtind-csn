@@ -8,6 +8,8 @@ const rounds = new Map();
 const caseCatalog = new Map();
 const CASE_FILE = path.join(DATA_DIR, 'cases.json');
 const SERVER_AUTH_GAMES = new Set(['coinflip','mines','towers','roulette','keno','dice','blackjack','cases','case-battles','crash']);
+const TOWERS_CONFIGS = { Easy:{columns:4,traps:1,multipliers:[1.28,1.65,2.15,2.8,3.65,4.8,6.3,8.3]}, Medium:{columns:3,traps:1,multipliers:[1.45,2.15,3.2,4.75,7.05,10.5,15.6,23.2]}, Hard:{columns:2,traps:1,multipliers:[1.95,3.85,7.6,15,29.5,58,114,225]}, Extreme:{columns:3,traps:2,multipliers:[2.9,8.5,25,74,218,645,1900,5600]} };
+const KENO_PAYTABLES = { Classic:{1:{0:0,1:3.8},2:{0:0,1:1.7,2:5.2},3:{0:0,1:1,2:2.7,3:26},4:{0:0,1:0,2:1.8,3:8,4:80},5:{0:0,1:0,2:1.4,3:4,4:25,5:300},6:{0:0,1:0,2:0,3:3,4:12,5:90,6:800},7:{0:0,1:0,2:0,3:1.8,4:6,5:30,6:250,7:2000},8:{0:0,1:0,2:0,3:0,4:4,5:18,6:100,7:600,8:3000},9:{0:0,1:0,2:0,3:0,4:2.5,5:10,6:45,7:250,8:1200,9:4500},10:{0:0,1:0,2:0,3:0,4:1.6,5:4.5,6:18,7:80,8:400,9:2000,10:7500}}, Low:{1:{0:0,1:1.95},2:{0:0,1:1.95,2:3.9},3:{0:0,1:1.1,2:2.2,3:13.5},4:{0:0,1:.5,2:1.6,3:4.2,4:24.5},5:{0:0,1:.5,2:1.2,3:2.5,4:12,5:120},6:{0:0,1:0,2:1,3:2,4:6,5:30,6:350},7:{0:0,1:0,2:.8,3:1.5,4:3.5,5:14,6:90,7:700},8:{0:0,1:0,2:.5,3:1.2,4:2.5,5:8,6:45,7:250,8:1200},9:{0:0,1:0,2:0,3:1,4:2,5:5,6:22,7:100,8:500,9:2500},10:{0:0,1:0,2:0,3:.8,4:1.5,5:3.5,6:12,7:45,8:200,9:1000,10:4000}}, Medium:{1:{0:0,1:3.8},2:{0:0,1:1.75,2:4.95},3:{0:0,1:1,2:2.8,3:28},4:{0:0,1:0,2:1.75,3:8.5,4:85},5:{0:0,1:0,2:1.4,3:4,4:27,5:350},6:{0:0,1:0,2:0,3:3,4:12.5,5:95,6:900},7:{0:0,1:0,2:0,3:1.8,4:6.5,5:32,6:275,7:2200},8:{0:0,1:0,2:0,3:0,4:4.2,5:19,6:110,7:650,8:3500},9:{0:0,1:0,2:0,3:0,4:2.5,5:11,6:48,7:280,8:1350,9:5000},10:{0:0,1:0,2:0,3:0,4:1.7,5:4.8,6:19.5,7:85,8:450,9:2200,10:8500}}, High:{1:{0:0,1:3.96},2:{0:0,1:0,2:9.9},3:{0:0,1:0,2:3.5,3:52},4:{0:0,1:0,2:2,3:14,4:170},5:{0:0,1:0,2:0,3:5.5,4:55,5:750},6:{0:0,1:0,2:0,3:0,4:20,5:180,6:2000},7:{0:0,1:0,2:0,3:0,4:9,5:65,6:600,7:5000},8:{0:0,1:0,2:0,3:0,4:0,5:35,6:250,7:1500,8:9000},9:{0:0,1:0,2:0,3:0,4:0,5:18,6:100,7:650,8:3200,9:15000},10:{0:0,1:0,2:0,3:0,4:0,5:8.5,6:40,7:200,8:1100,9:5500,10:25000}} };
 
 function ensure() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -93,11 +95,11 @@ export function installGameRoutes(app, economy) {
     if (gameId==='case-battles') { const ids=Array.isArray(req.body?.caseIds)?req.body.caseIds.map(String):[String(req.body?.caseId||'')]; round.state={caseIds:ids,mode:'house',houseSeed:crypto.randomBytes(16).toString('hex')}; }
     if (gameId==='cases') { const c=caseCatalog.get(String(req.body?.caseId||'')); const count=Math.max(1,Math.min(4,Number(req.body?.count)||1)); if(!c)return res.status(400).json({ok:false,error:'case_not_found'}); const total=c.price*count; if(Math.abs(total-betDls)>0.01)return res.status(400).json({ok:false,error:'case_price_mismatch'}); round.state={caseId:c.id,count}; }
     if (gameId==='mines') {
-      const size=Math.max(2,Math.min(8,Number(req.body?.gridSize)||5)); const total=size*size; const mineCount=Math.max(1,Math.min(total-1,Number(req.body?.mines)||3));
+      const size=Math.max(5,Math.min(8,Number(req.body?.gridSize)||5)); const total=size*size; const mineCount=Math.max(1,Math.min(total-1,Number(req.body?.mines)||3));
       const rr=rng(serverSeed+':mines'); const mineSet=new Set(); while(mineSet.size<mineCount) mineSet.add(Math.floor(rr()*total));
       round.state={size,mineCount,revealed:[],mineMap:[...mineSet]};
     } else if (gameId==='towers') {
-      const cols=Math.max(2,Math.min(4,Number(req.body?.columns)||4)); const traps=Math.max(1,Math.min(cols-1,Number(req.body?.traps)||1));
+      const requestedCols=Math.max(2,Math.min(4,Number(req.body?.columns)||4)); const requestedTraps=Math.max(1,Math.min(requestedCols-1,Number(req.body?.traps)||1)); const cols=requestedCols; const traps=requestedTraps;
       const rr=rng(serverSeed+':towers'); round.state={floor:0,cols,traps,trapsMap:Array.from({length:8},()=>{const set=new Set();while(set.size<traps)set.add(Math.floor(rr()*cols));return [...set];}),traps:Array.from({length:8},()=>[])}; round.state.traps=round.state.trapsMap; delete round.state.trapsMap;
     }
     rounds.set(round.id,round); persist();
@@ -114,6 +116,8 @@ export function installGameRoutes(app, economy) {
     const random=rng(round.serverSeed + ':' + round.clientSeed + ':' + round.nonce + ':' + step);
     if(round.gameId==='blackjack' && action.type==='double' && !round.state?.doubled){ const extra=economy.debitForGame(user.id,round.betDls,'blackjack-double'); if(!extra.ok)return res.status(400).json({ok:false,error:extra.error}); round.state.doubled=true; round.totalBetDls=round.betDls*2; }
     const result=round.gameId==='blackjack' ? (action.type==='initial' ? (()=>{const p=round.state.player,d=round.state.dealer;const ps=blackjackScore(p),ds=blackjackScore(d);if(ps===21){round.state.phase='finished';return {outcome:ds===21?'push':'win',player:p,dealer:d,payout:ds===21?round.betDls:round.betDls*2.5,score:ps,dealerScore:ds};}return {outcome:'continue',player:p,dealer:[d[0]],payout:0,score:ps,dealerScore:blackjackScore([d[0]])};})() : resolveBlackjack(round,action) : (round.gameId==='crash' ? resolveCrash(round,action) : (round.gameId==='case-battles' ? resolveCaseBattle(round,random,action) : ((round.gameId==='coinflip' && action.cashout===true) ? resolveCashout(round, action) : resolveGame(round.gameId,random,action,round.betDls,round.state))));
+    if(result?.error)return res.status(400).json({ok:false,error:result.error});
+    round.result=result;
     const payout=Number((result.payout||0).toFixed(2));
     if (payout < 0 || payout > round.betDls * 100000) return res.status(400).json({ok:false,error:'invalid_payout'});
     const shouldCredit=(round.gameId==='blackjack' ? result.outcome!=='continue' : (round.gameId==='crash' ? action.type==='cashout' || action.type==='cancel' || result.outcome==='loss' : (action.cashout===true || action.final===true || !['coinflip'].includes(round.gameId))));
@@ -124,7 +128,7 @@ export function installGameRoutes(app, economy) {
       round.status='RESOLVED'; round.payoutDls=payout; round.resolvedAt=new Date().toISOString();
     }
     if (['mines','towers'].includes(round.gameId) && result.continue) { round.state=result.state; }
-    round.lastStep=step; round.result=result; persist();
+    round.lastStep=step; persist();
     res.json({ok:true,roundId:round.id,result,payoutDls:payout,balanceDls:credit.balance,finished:shouldCredit,serverSeed:shouldCredit?round.serverSeed:undefined,serverSeedHash:round.serverSeedHash,clientSeed:round.clientSeed,nonce:round.nonce});
   });
 }
@@ -179,6 +183,92 @@ function resolveCrash(round,action){
   if(action.type==='cashout'){if(current>=crashPoint)return {outcome:'loss',crashPoint,current,payout:0};const multiplier=Math.max(1,current);return {outcome:'win',current,multiplier,payout:round.betDls*multiplier};}
   if(current>=crashPoint)return {outcome:'loss',crashPoint,current,payout:0};
   return {outcome:'active',current,payout:0,continue:true};
+}
+function resolveGame(gameId, random, action, betDls, state) {
+  if (gameId === 'coinflip') {
+    const choice = action.choice === 'tails' ? 'tails' : action.choice === 'heads' ? 'heads' : null;
+    if (!choice) return { outcome:'invalid', payout:0, error:'invalid_choice' };
+    const step = Math.max(0, Math.min(9, Number(action.step)||0));
+    state.path = Array.isArray(state.path) ? state.path : [];
+    if (state.path[step]) return state.path[step];
+    const winningSide = random() < 0.5 ? 'heads' : 'tails';
+    const win = winningSide === choice;
+    const multiplier = step > 0 ? [1.92,3.84,7.68,15.36,30.72,61.44,122.88,245.76,491.52][step-1] : 1.92;
+    const result = { outcome: win?'win':'loss', winningSide, choice, step, multiplier, payout: win ? (action.final ? betDls*multiplier : 0) : 0 };
+    state.path[step] = result;
+    return {...result, continue:win && !action.final};
+  }
+  if (gameId === 'mines') {
+    const index = Number(action.selected);
+    const size=Number(state?.size)||5, total=size*size;
+    const mines=Array.isArray(state?.mineMap)?state.mineMap:[];
+    const revealed=Array.isArray(state?.revealed)?state.revealed:[];
+    if (!Number.isInteger(index)||index<0||index>=total||revealed.includes(index)) return {outcome:'invalid',payout:0,error:'invalid_tile'};
+    if (mines.includes(index)) return {outcome:'loss',mineMap:mines,payout:0};
+    state.revealed=[...revealed,index];
+    if(state.revealed.length>=total-mines.length) {
+      const multiplier=minesMultiplier(size,mines.length,state.revealed.length);
+      return {outcome:'win',mineMap:mines,revealed:state.revealed,multiplier,payout:betDls*multiplier};
+    }
+    return {outcome:'safe',revealed:state.revealed,multiplier:minesMultiplier(size,mines.length,state.revealed.length),payout:0,continue:true};
+  }
+  if (gameId === 'towers') {
+    const floor=Number(action.floor), col=Number(action.col);
+    const cols=Number(state?.cols)||4, traps=Number(state?.traps)||1;
+    if(!Number.isInteger(floor)||floor!==Number(state.floor)||!Number.isInteger(col)||col<0||col>=cols)return {outcome:'invalid',payout:0,error:'invalid_tile'};
+    const row=Array.isArray(state.trapsMap?.[floor])?state.trapsMap[floor]:[];
+    if(row.includes(col)) return {outcome:'loss',traps:state.trapsMap,payout:0,floor};
+    state.floor=floor+1;
+    const cfg=Object.values(TOWERS_CONFIGS).find(x=>x.columns===cols&&x.traps===traps);
+    const multipliers=cfg?.multipliers||TOWERS_CONFIGS.Easy.multipliers;
+    if(state.floor>=8)return {outcome:'win',floor:state.floor,multiplier:multipliers[7],payout:betDls*multipliers[7],traps:state.trapsMap};
+    return {outcome:'safe',floor:state.floor,multiplier:multipliers[state.floor-1],payout:0,continue:true};
+  }
+  if(gameId==='dice'){
+    const target=Math.max(1,Math.min(99,Number(action.target)||50)), condition=action.condition==='over'?'over':'under';
+    const roll=Number((random()*100).toFixed(2));
+    const win=condition==='under'?roll<target:roll>target;
+    const probability=condition==='under'?target/100:(100-target)/100;
+    const multiplier=probability>0?Number((0.98/probability).toFixed(2)):0;
+    return {outcome:win?'win':'loss',roll,target,condition,multiplier,payout:win?betDls*multiplier:0};
+  }
+  if(gameId==='keno'){
+    const picks=Array.isArray(action.picks)?[...new Set(action.picks.map(Number))].filter(n=>Number.isInteger(n)&&n>=1&&n<=40):[];
+    const risk=KENO_PAYTABLES[action.risk]?action.risk:'Medium';
+    if(picks.length<1||picks.length>10)return {outcome:'invalid',payout:0,error:'invalid_picks'};
+    const pool=Array.from({length:40},(_,i)=>i+1);
+    for(let i=pool.length-1;i>0;i--){const j=Math.floor(random()*(i+1));[pool[i],pool[j]]=[pool[j],pool[i]];}
+    const drawn=pool.slice(0,10),hits=drawn.filter(n=>picks.includes(n)).length;
+    const multiplier=Number(KENO_PAYTABLES[risk]?.[picks.length]?.[hits]||0);
+    return {outcome:multiplier>0?'win':'loss',drawn,hits,picks,risk,multiplier,payout:betDls*multiplier};
+  }
+  if(gameId==='roulette'){
+    const bets=action.bets&&typeof action.bets==='object'?action.bets:{};
+    const number=Math.floor(random()*37);
+    const totalBet=Object.values(bets).reduce((s,v)=>s+(Number(v)||0),0);
+    if(totalBet<=0)return {outcome:'invalid',payout:0,error:'no_bets'};
+    const validBet=(key,amount)=>{const a=Number(amount);if(!Number.isFinite(a)||a<=0)return 0;return Math.min(a,100000000);};
+    let payout=0;
+    for(const [key,raw] of Object.entries(bets)){
+      const amount=validBet(key,raw); if(!amount)continue;
+      let win=false,mult=0;
+      if(key==='num_0'||/^num_\\d+$/.test(key)){const n=Number(key.slice(4));win=n===number;mult=35;}
+      else if(key==='red'||key==='black'){win=number!==0&&(key==='red')===[1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36].includes(number);mult=1;}
+      else if(key==='even'||key==='odd'){win=number!==0&&(key==='even'?number%2===0:number%2===1);mult=1;}
+      else if(key==='1_to_18'||key==='19_to_36'){win=number!==0&&(key==='1_to_18'?number<=18:number>=19);mult=1;}
+      else if(/^col_[123]$/.test(key)){const col=Number(key.slice(4));win=number!==0&&((number-1)%3+1)===col;mult=2;}
+      else if(key==='1st_12'||key==='2nd_12'||key==='3rd_12'){const d=key==='1st_12'?1:key==='2nd_12'?2:3;win=number>=((d-1)*12+1)&&number<=d*12;mult=2;}
+      payout+=win?amount*(mult+1):0;
+    }
+    return {outcome:payout>0?'win':'loss',number,payout,totalBet};
+  }
+  return {outcome:'invalid',payout:0,error:'unsupported_game'};
+}
+function minesMultiplier(size,mineCount,revealed) {
+  if(revealed<=0)return 1;
+  const total=size*size; let prob=1;
+  for(let i=0;i<revealed;i++)prob*=(total-mineCount-i)/(total-i);
+  return Math.max(1.01,Number((0.99/prob).toFixed(2)));
 }
 function resolveCaseBattle(round,r,action){
   const ids=Array.isArray(round.state?.caseIds)?round.state.caseIds:[];if(!ids.length)return {outcome:'invalid',payout:0,error:'case_not_found'};
