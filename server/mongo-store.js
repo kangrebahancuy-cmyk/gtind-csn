@@ -359,7 +359,11 @@ const db = new DatabaseAdapter();
 export function isSqliteConfigured() { return true; }
 export async function getMongoClient() { return { close: async () => {} }; }
 export async function getMongoDb() { return db; }
-export async function pingMongo() { return true; }
+export async function pingMongo() {
+  const row = sqlite.prepare('SELECT 1 AS ok').get();
+  if (!row || row.ok !== 1) throw new Error('sqlite_unhealthy');
+  return true;
+}
 
 export async function ensureMongoSchema() {
   for (const name of Object.keys(UNIQUE_FIELDS)) ensureTable(name);
