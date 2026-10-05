@@ -63,9 +63,20 @@ function ensureTable(name) {
   return table;
 }
 
+function revive(value, key = '') {
+  if (Array.isArray(value)) return value.map(v => revive(v));
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k,v] of Object.entries(value)) out[k] = revive(v, k);
+    return out;
+  }
+  if (typeof value === 'string' && /(?:At|Date|date)$/.test(key) && !Number.isNaN(Date.parse(value))) return new Date(value);
+  return value;
+}
+
 function clone(value) {
   if (value === undefined) return value;
-  return JSON.parse(JSON.stringify(value));
+  return revive(JSON.parse(JSON.stringify(value)));
 }
 
 function getPath(obj, pathName) {
@@ -97,6 +108,8 @@ function equal(a, b) {
 }
 
 function compare(value, op, expected) {
+  if (expected instanceof Date && typeof value === 'string') value = new Date(value);
+  if (value instanceof Date && typeof expected === 'string') expected = new Date(expected);
   if (op === '$in') return Array.isArray(expected) && expected.some(x => equal(value, x));
   if (op === '$nin') return Array.isArray(expected) && !expected.some(x => equal(value, x));
   if (op === '$ne') return !equal(value, expected);
@@ -181,7 +194,7 @@ function sortDocs(docs, sort) {
 function storedRows(name) {
   const table = ensureTable(name);
   return sqlite.prepare(`SELECT k, data FROM ${table}`).all().map(row => {
-    const doc = JSON.parse(row.data);
+    const doc = revive(JSON.parse(row.data));
     return doc;
   });
 }
