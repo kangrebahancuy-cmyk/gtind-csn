@@ -55,8 +55,8 @@ export function crashPointFromSeed(seed) {
   const u=digest.readUInt32BE(0)/0x100000000;
   return Math.min(10000,Math.max(1,Number((0.99/(1-u)).toFixed(2))));
 }
-function requireUser(req, res) {
-  const user = req.__economyUser;
+async function requireUser(req, res) {
+  const user = await economy.await sessionUser(req);
   if (!user) { res.status(401).json({ ok:false,error:'not_authenticated' }); return null; }
   return user;
 }
@@ -126,32 +126,32 @@ export function installGameRoutes(app, economy, options = {}) {
   function settleCrashPlayer(p,auto=false){
     if(p.status!=='active')return null;
     const multiplier=auto?Math.max(1,crashGlobal.multiplier):Math.max(1,crashGlobal.multiplier);
-    const result=economy.creditGameResult(p.userId,p.amountDls*multiplier,{id:p.roundId,gameId:'crash-global',result:{outcome:'win',current:multiplier,multiplier}});
+    const result=economy.await creditGameResult(p.userId,p.amountDls*multiplier,{id:p.roundId,gameId:'crash-global',result:{outcome:'win',current:multiplier,multiplier}});
     if(!result.ok)return null;
     p.status='cashed';p.cashedAt=multiplier;p.payoutDls=Number((p.amountDls*multiplier).toFixed(2)); persistCrash();
     return result;
   }
 
   app.get('/api/crash/state',(req,res)=>{
-    const user=economy.sessionUser(req);
+    const user=economy.await sessionUser(req);
     const own=user?[...crashGlobal.players.values()].find(p=>p.userId===user.id):null;
     res.json({ok:true,state:publicCrashState(),userBet:own?{roundId:own.roundId,amountDls:own.amountDls,autoCashout:own.autoCashout,status:own.status,cashedAt:own.cashedAt||null,payoutDls:own.payoutDls||0}:null});
   });
   app.post('/api/crash/join',(req,res)=>{
-    const user=requireUser(req,res);if(!user)return;
+    const user=await requireUser(req,res);if(!user)return;
     if(crashGlobal.phase!=='betting')return res.status(409).json({ok:false,error:'betting_closed'});
     if(crashGlobal.players.has(user.id))return res.status(409).json({ok:false,error:'already_joined'});
     const amount=Number(req.body?.betDls),auto=Number(req.body?.autoCashout||0);
     if(!Number.isFinite(amount)||amount<=0||amount>100000000)return res.status(400).json({ok:false,error:'invalid_bet'});
     if(auto && (auto<1.01||auto>10000))return res.status(400).json({ok:false,error:'invalid_auto_cashout'});
-    const debit=economy.debitForGame(user.id,amount,'crash-global');
+    const debit=economy.await debitForGame(user.id,amount,'crash-global');
     if(!debit.ok)return res.status(400).json({ok:false,error:debit.error});
     const p={userId:user.id,username:user.username,amountDls:amount,autoCashout:auto||0,status:'active',roundId:crashGlobal.roundId};
     crashGlobal.players.set(user.id,p); persistCrash(); broadcast({type:'CRASH_PLAYER_JOINED',payload:{roundId:crashGlobal.roundId,username:user.username}});
     res.json({ok:true,state:publicCrashState(),userBet:{roundId:p.roundId,amountDls:amount,autoCashout:p.autoCashout,status:'active'},balanceDls:debit.balance});
   });
   app.post('/api/crash/cashout',(req,res)=>{
-    const user=requireUser(req,res);if(!user)return;
+    const user=await requireUser(req,res);if(!user)return;
     const p=crashGlobal.players.get(user.id);
     if(!p||p.roundId!==crashGlobal.roundId)return res.status(404).json({ok:false,error:'no_active_bet'});
     if(crashGlobal.phase!=='flying'||p.status!=='active')return res.status(409).json({ok:false,error:'cashout_unavailable'});
@@ -160,25 +160,25 @@ export function installGameRoutes(app, economy, options = {}) {
     res.json({ok:true,result:{outcome:'win',current:p.cashedAt,multiplier:p.cashedAt,payout:p.payoutDls},balanceDls:result.balance,state:publicCrashState()});
   });
   app.post('/api/crash/cancel',(req,res)=>{
-    const user=requireUser(req,res);if(!user)return;
+    const user=await requireUser(req,res);if(!user)return;
     const p=crashGlobal.players.get(user.id);
     if(!p||p.roundId!==crashGlobal.roundId)return res.status(404).json({ok:false,error:'no_active_bet'});
     if(crashGlobal.phase!=='betting'||p.status!=='active')return res.status(409).json({ok:false,error:'cancel_unavailable'});
-    const result=economy.creditGameResult(user.id,p.amountDls,{id:p.roundId,gameId:'crash-global-cancel',result:{outcome:'cancelled',multiplier:1}});
+    const result=economy.await creditGameResult(user.id,p.amountDls,{id:p.roundId,gameId:'crash-global-cancel',result:{outcome:'cancelled',multiplier:1}});
     if(!result.ok)return res.status(500).json({ok:false,error:'refund_failed'});
     p.status='cancelled'; persistCrash();
     res.json({ok:true,balanceDls:result.balance,state:publicCrashState()});
   });
 
   app.use('/api/games', (req, _res, next) => {
-    const user = economy.sessionUser(req);
+    const user = economy.await sessionUser(req);
     req.__economyUser = user;
     next();
   });
 
   app.get('/api/games/cases/catalog',(req,res)=>res.json({ok:true,cases:[...caseCatalog.values()]}));
   app.post('/api/games/cases/catalog',(req,res)=>{
-    const user=requireUser(req,res);if(!user)return;
+    const user=await requireUser(req,res);if(!user)return;
     if(!user.isAdmin)return res.status(403).json({ok:false,error:'admin_required'});
     const c=req.body?.case;
     if(!c||!c.id||!c.name||!Array.isArray(c.items)||!c.items.length)return res.status(400).json({ok:false,error:'invalid_case'});
@@ -189,8 +189,8 @@ export function installGameRoutes(app, economy, options = {}) {
     const safe={id:String(c.id),name:String(c.name),image:String(c.image||''),color:String(c.color||''),price,volatility:String(c.volatility||'Medium'),creator:String(c.creator||user.username),openedTimes:Number(c.openedTimes)||0,items:normalized};
     caseCatalog.set(safe.id,safe);persistCases();res.json({ok:true,case:safe});
   });
-  app.delete('/api/games/cases/catalog/:id',(req,res)=>{const user=requireUser(req,res);if(!user)return;if(!user.isAdmin)return res.status(403).json({ok:false,error:'admin_required'});caseCatalog.delete(String(req.params.id));persistCases();res.json({ok:true});});
-  app.get('/api/games/case-battles/lobby', (req,res) => {
+  app.delete('/api/games/cases/catalog/:id',(req,res)=>{const user=await requireUser(req,res);if(!user)return;if(!user.isAdmin)return res.status(403).json({ok:false,error:'admin_required'});caseCatalog.delete(String(req.params.id));persistCases();res.json({ok:true});});
+  app.get('/api/games/case-battles/lobby', async (req,res) => {
     const battles=[...caseBattles.values()]
       .filter(b=>Date.now()-b.createdAt < 10*60*1000)
       .sort((a,b)=>b.createdAt-a.createdAt)
@@ -199,8 +199,8 @@ export function installGameRoutes(app, economy, options = {}) {
     res.json({ok:true,battles});
   });
 
-  app.post('/api/games/case-battles/create', (req,res) => {
-    const user=requireUser(req,res);if(!user)return;
+  app.post('/api/games/case-battles/create', async (req,res) => {
+    const user=await requireUser(req,res);if(!user)return;
     const config=String(req.body?.playerConfig||'1v1');
     if(config!=='1v1')return res.status(400).json({ok:false,error:'only_1v1_is_currently_supported'});
     const ids=Array.isArray(req.body?.caseIds)?req.body.caseIds.map(String):[];
@@ -209,7 +209,7 @@ export function installGameRoutes(app, economy, options = {}) {
     if(cases.some(x=>!x))return res.status(400).json({ok:false,error:'case_not_found'});
     const betDls=Number(cases.reduce((n,x)=>n+Number(x.price||0),0).toFixed(2));
     if(!Number.isFinite(betDls)||betDls<=0)return res.status(400).json({ok:false,error:'invalid_battle_value'});
-    const debit=economy.debitForGame(user.id,betDls,'case-battle-pvp');
+    const debit=economy.await debitForGame(user.id,betDls,'case-battle-pvp');
     if(!debit.ok)return res.status(400).json({ok:false,error:debit.error});
     const battleId='cb_'+Date.now()+'_'+crypto.randomBytes(6).toString('hex');
     const serverSeed=crypto.randomBytes(32).toString('hex');
@@ -225,12 +225,12 @@ export function installGameRoutes(app, economy, options = {}) {
   });
 
   app.post('/api/games/case-battles/join', (req,res) => {
-    const user=requireUser(req,res);if(!user)return;
+    const user=await requireUser(req,res);if(!user)return;
     const battle=caseBattles.get(String(req.body?.battleId||''));
     if(!battle)return res.status(404).json({ok:false,error:'battle_not_found'});
     if(battle.status!=='open')return res.status(409).json({ok:false,error:'battle_not_open'});
     if(battle.players.some(p=>p.userId===user.id))return res.status(409).json({ok:false,error:'already_in_battle'});
-    const debit=economy.debitForGame(user.id,battle.totalCostPerPlayer,'case-battle-pvp');
+    const debit=economy.await debitForGame(user.id,battle.totalCostPerPlayer,'case-battle-pvp');
     if(!debit.ok)return res.status(400).json({ok:false,error:debit.error});
     battle.players.push({userId:user.id,username:user.username,betDls:battle.totalCostPerPlayer});
     battle.totalPot=Number((battle.totalCostPerPlayer*2).toFixed(2));
@@ -241,12 +241,12 @@ export function installGameRoutes(app, economy, options = {}) {
     const settlementRound={id:battle.id,gameId:'case-battle-pvp',result};
     if(result.outcome==='draw'){
       for(const player of battle.players){
-        const refund=economy.creditGameResult(player.userId,battle.totalCostPerPlayer,settlementRound);
+        const refund=economy.await creditGameResult(player.userId,battle.totalCostPerPlayer,settlementRound);
         if(!refund.ok){battle.status='settlement_failed';persistCaseBattles();return res.status(500).json({ok:false,error:'settlement_failed'});}
       }
       battle.payoutDls=battle.totalCostPerPlayer*2;
     } else if(payout>0){
-      const credit=economy.creditGameResult(result.winnerUserId,payout,settlementRound);
+      const credit=economy.await creditGameResult(result.winnerUserId,payout,settlementRound);
       if(!credit.ok){battle.status='settlement_failed';persistCaseBattles();return res.status(500).json({ok:false,error:'settlement_failed'});}
       battle.payoutDls=payout;
     }
@@ -256,24 +256,24 @@ export function installGameRoutes(app, economy, options = {}) {
   });
 
   app.post('/api/games/case-battles/cancel', (req,res) => {
-    const user=requireUser(req,res);if(!user)return;
+    const user=await requireUser(req,res);if(!user)return;
     const battle=caseBattles.get(String(req.body?.battleId||''));
     if(!battle)return res.status(404).json({ok:false,error:'battle_not_found'});
     if(battle.status!=='open')return res.status(409).json({ok:false,error:'battle_not_open'});
     if(battle.creator.userId!==user.id)return res.status(403).json({ok:false,error:'creator_required'});
-    const refund=economy.creditGameResult(user.id,battle.totalCostPerPlayer,{id:battle.id,gameId:'case-battle-cancel',result:{multiplier:1}});
+    const refund=economy.await creditGameResult(user.id,battle.totalCostPerPlayer,{id:battle.id,gameId:'case-battle-cancel',result:{multiplier:1}});
     if(!refund.ok)return res.status(500).json({ok:false,error:'refund_failed'});
     battle.status='cancelled';battle.resolvedAt=new Date().toISOString();persistCaseBattles();
     res.json({ok:true,balanceDls:refund.balance});
   });
 
   app.get('/api/games/fairness', (req,res) => {
-    const user=requireUser(req,res); if(!user)return;
+    const user=await requireUser(req,res); if(!user)return;
     res.json({ok:true,algorithm:'HMAC-SHA256',description:'Server seed is generated server-side and only its SHA-256 commitment is exposed before the result.'});
   });
 
-  app.post('/api/games/start', (req,res) => {
-    const user=requireUser(req,res); if(!user)return;
+  app.post('/api/games/start', async (req,res) => {
+    const user=await requireUser(req,res); if(!user)return;
     const gameId=String(req.body?.gameId||'').trim().toLowerCase();
     const betDls=Number(req.body?.betDls);
     if (!SERVER_AUTH_GAMES.has(gameId)) return res.status(409).json({ok:false,error:'game_not_server_authoritative'});
@@ -282,7 +282,7 @@ export function installGameRoutes(app, economy, options = {}) {
     if(gameId==='cases'){const c=caseCatalog.get(String(req.body?.caseId||''));const count=Math.max(1,Math.min(4,Number(req.body?.count)||1));if(!c)return res.status(400).json({ok:false,error:'case_not_found'});if(Math.abs(c.price*count-betDls)>0.01)return res.status(400).json({ok:false,error:'case_price_mismatch'});}
     if(gameId==='crash')return res.status(410).json({ok:false,error:'use_global_crash_endpoint'});
     if(gameId==='case-battles'){const ids=Array.isArray(req.body?.caseIds)?req.body.caseIds.map(String):[String(req.body?.caseId||'')];const cs=ids.map(id=>caseCatalog.get(id));if(!cs.length||cs.some(c=>!c))return res.status(400).json({ok:false,error:'case_not_found'});const total=cs.reduce((n,c)=>n+Number(c.price||0),0);if(Math.abs(total-betDls)>0.01)return res.status(400).json({ok:false,error:'battle_price_mismatch'});}
-    const result=economy.debitForGame(user.id,betDls,gameId);
+    const result=economy.await debitForGame(user.id,betDls,gameId);
     if (!result.ok) return res.status(400).json({ok:false,error:result.error});
     const serverSeed=crypto.randomBytes(32).toString('hex');
     const clientSeed=String(req.body?.clientSeed||'').slice(0,128) || crypto.randomBytes(16).toString('hex');
@@ -306,15 +306,15 @@ export function installGameRoutes(app, economy, options = {}) {
     res.json({ok:true,roundId:round.id,serverSeedHash:commitment,clientSeed,nonce,balanceDls:result.balance,initialResult:round.initialResult||undefined});
   });
 
-  app.post('/api/games/resolve', (req,res) => {
-    const user=requireUser(req,res); if(!user)return;
+  app.post('/api/games/resolve', async (req,res) => {
+    const user=await requireUser(req,res); if(!user)return;
     const round=rounds.get(String(req.body?.roundId||''));
     if(!round || round.userId!==user.id) return res.status(404).json({ok:false,error:'round_not_found'});
     if(round.status!=='ACTIVE') return res.status(409).json({ok:false,error:'round_already_resolved'});
     const action=req.body?.action && typeof req.body.action==='object' ? req.body.action : {};
     const step=Number.isInteger(action.step)?Math.max(0,action.step):0;
     const random=rng(round.serverSeed + ':' + round.clientSeed + ':' + round.nonce + ':' + step);
-    if(round.gameId==='blackjack' && action.type==='double' && !round.state?.doubled){ const extra=economy.debitForGame(user.id,round.betDls,'blackjack-double'); if(!extra.ok)return res.status(400).json({ok:false,error:extra.error}); round.state.doubled=true; round.totalBetDls=round.betDls*2; }
+    if(round.gameId==='blackjack' && action.type==='double' && !round.state?.doubled){ const extra=economy.await debitForGame(user.id,round.betDls,'blackjack-double'); if(!extra.ok)return res.status(400).json({ok:false,error:extra.error}); round.state.doubled=true; round.totalBetDls=round.betDls*2; }
     const result=round.gameId==='blackjack' ? (action.type==='initial' ? (()=>{const p=round.state.player,d=round.state.dealer;const ps=blackjackScore(p),ds=blackjackScore(d);if(ps===21){round.state.phase='finished';return {outcome:ds===21?'push':'win',player:p,dealer:d,payout:ds===21?round.betDls:round.betDls*2.5,score:ps,dealerScore:ds};}return {outcome:'continue',player:p,dealer:[d[0]],payout:0,score:ps,dealerScore:blackjackScore([d[0]])};})() : resolveBlackjack(round,action) : (round.gameId==='crash' ? resolveCrash(round,action) : (round.gameId==='case-battles' ? resolveCaseBattle(round,random,action) : ((round.gameId==='coinflip' && action.cashout===true) ? resolveCashout(round, action) : resolveGame(round.gameId,random,action,round.betDls,round.state))));
     if(result?.error)return res.status(400).json({ok:false,error:result.error});
     round.result=result;
@@ -323,7 +323,7 @@ export function installGameRoutes(app, economy, options = {}) {
     const shouldCredit=(round.gameId==='blackjack' ? result.outcome!=='continue' : (round.gameId==='crash' ? action.type==='cashout' || action.type==='cancel' || result.outcome==='loss' : (round.gameId==='coinflip' ? result.outcome==='loss' || action.cashout===true || action.final===true : (action.cashout===true || action.final===true || !['coinflip'].includes(round.gameId)))));
     let credit={ok:true,balance:round.balanceAfterBet};
     if(shouldCredit){
-      credit=economy.creditGameResult(user.id,payout,round);
+      credit=economy.await creditGameResult(user.id,payout,round);
       if(!credit.ok) return res.status(500).json({ok:false,error:'credit_failed'});
       round.status='RESOLVED'; round.payoutDls=payout; round.resolvedAt=new Date().toISOString();
     }
