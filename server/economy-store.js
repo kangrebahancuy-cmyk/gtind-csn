@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { DatabaseSync } from 'node:sqlite';
+import crypto from 'node:crypto';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'economy.sqlite');
@@ -14,6 +15,13 @@ function openDb() {
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = FULL;
+    CREATE TABLE IF NOT EXISTS sessions (
+      token TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
     CREATE TABLE IF NOT EXISTS economy_state (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       version INTEGER NOT NULL,
@@ -79,4 +87,41 @@ export function saveEconomyState(state) {
   } finally {
     db.close();
   }
+}
+
+
+export function createPersistentSession(userId, ttlMs) {
+  const db = openDb();
+  try {
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = Date.now() + ttlMs;
+    db.prepare('INSERT INTO sessions(token,user_id,expires_at,created_at) VALUES(?,?,?,?)')
+      .run(token, String(userId), expiresAt, new Date().toISOString());
+    return { token, expiresAt };
+  } finally { db.close(); }
+}
+
+export function getPersistentSession(token) {
+  const db = openDb();
+  try {
+    const row = db.prepare('SELECT user_id, expires_at FROM sessions WHERE token=?').get(String(token));
+    if (!row) return null;
+    if (Number(row.expires_at) < Date.now()) {
+      db.prepare('DELETE FROM sessions WHERE token=?').run(String(token));
+      return null;
+    }
+    return { userId: String(row.user_id), expiresAt: Number(row.expires_at) };
+  } finally { db.close(); }
+}
+
+export function deletePersistentSession(token) {
+  const db = openDb();
+  try { db.prepare('DELETE FROM sessions WHERE token=?').run(String(token)); }
+  finally { db.close(); }
+}
+
+export function prunePersistentSessions() {
+  const db = openDb();
+  try { db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now()); }
+  finally { db.close(); }
 }
