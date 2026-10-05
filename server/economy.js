@@ -4,7 +4,19 @@ const rateBuckets = new Map();
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_BODY_AMOUNT = 100000000;
 function constantTimeEqual(a,b) { const aa=Buffer.from(String(a)); const bb=Buffer.from(String(b)); return aa.length===bb.length && crypto.timingSafeEqual(aa,bb); }
-function rateLimit(key, limit=30, windowMs=60000) { const nowMs=Date.now(); const row=rateBuckets.get(key); if(!row || nowMs-row.start>=windowMs){rateBuckets.set(key,{start:nowMs,count:1});return true;} row.count++; return row.count<=limit; }
+async function rateLimit(key, limit=30, windowMs=60000) {
+  const nowMs=Date.now();
+  const db=await getMongoDb();
+  const c=db.collection('rateLimits');
+  const current=await c.findOne({key});
+  if(!current || current.expiresAt.getTime()<=nowMs){
+    await c.updateOne({key},{$set:{key,count:1,windowMs,expiresAt:new Date(nowMs+windowMs),updatedAt:new Date()}},{upsert:true});
+    return true;
+  }
+  if(current.count>=limit)return false;
+  const updated=await c.findOneAndUpdate({key,count:current.count},{$inc:{count:1},$set:{updatedAt:new Date()}},{returnDocument:'after'});
+  return Boolean(updated && updated.count<=limit);
+}
 function clientIp(req) { return String(req.headers['x-forwarded-for']||req.socket?.remoteAddress||'unknown').split(',')[0].trim(); }
 function audit(db, actor, action, metadata={}) { db.auditLogs ||= []; db.auditLogs.push({id:id('audit'),actorUserId:actor?.id||null,actorUsername:actor?.username||null,action,metadata,createdAt:now()}); if(db.auditLogs.length>10000) db.auditLogs=db.auditLogs.slice(-10000); }
 function verifyGtpsRequest(req, getGtpsSecret, body={}) { const secret=String(getGtpsSecret?.()||''); const legacy=String(body.secretKey||req.headers['x-gtps-secret']||''); if(secret && legacy && constantTimeEqual(secret,legacy)) return true; const ts=String(req.headers['x-gtps-timestamp']||''); const sig=String(req.headers['x-gtps-signature']||''); const n=Number(ts); if(!secret||!sig||!Number.isFinite(n)||Math.abs(Date.now()-n)>300000) return false; const raw=JSON.stringify(body); const expected=crypto.createHmac('sha256',secret).update(`${ts}.${raw}`).digest('hex'); return constantTimeEqual(expected,sig); }
@@ -219,7 +231,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     const username = String(req.body?.username || '').trim();
     const password = String(req.body?.password || '');
     const growId = String(req.body?.growId || '').trim();
-    if (!rateLimit(`register:${clientIp(req)}`,5,3600000)) return res.status(429).json({ok:false,error:'rate_limited'});
+    if (!(await rateLimit(`register:${clientIp(req)}`,5,3600000))) return res.status(429).json({ok:false,error:'rate_limited'});
     if (username.length < 4 || username.length > 24) return res.status(400).json({ ok:false, error:'invalid_username' });
     if (password.length < 8 || password.length > 128) return res.status(400).json({ ok:false, error:'invalid_password' });
     const db = await load();
@@ -240,7 +252,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
   app.post('/api/auth/login', async (req, res) => {
     const username = String(req.body?.username || '').trim();
     const password = String(req.body?.password || '');
-    if (!rateLimit(`login:${clientIp(req)}`,10,60000)) return res.status(429).json({ok:false,error:'rate_limited'});
+    if (!(await rateLimit(`login:${clientIp(req)}`,10,60000))) return res.status(429).json({ok:false,error:'rate_limited'});
     const db = await load();
     const user = findUser(db, username);
     if (!user || !verifyPassword(password, user.passwordHash)) return res.status(401).json({ ok:false, error:'invalid_credentials' });
@@ -319,7 +331,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
   app.post('/api/gtps/link-growid', async (req,res) => {
     const secret=String(req.body?.secretKey||req.headers['x-gtps-secret']||'');
     if(!constantTimeEqual(secret,getGtpsSecret())) return res.status(403).json({ok:false,error:'invalid_secret_key'});
-    if(!rateLimit(`gtps-link:${clientIp(req)}`,30,60000)) return res.status(429).json({ok:false,error:'rate_limited'});
+    if(!(await rateLimit(`gtps-link:${clientIp(req)}`,30,60000))) return res.status(429).json({ok:false,error:'rate_limited'});
     const code=String(req.body?.code||'').trim(); const growId=String(req.body?.growid||'').trim();
     if(!code || !growId) return res.status(400).json({ok:false,error:'invalid_link'});
     const db=await load(); const user=db.users.find(u=>u.linkCode===code);
@@ -448,7 +460,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     const dls=currency==='BGL'?amount*100:currency==='WL'?amount/100:amount;
     const db=await load(); const fresh=db.users.find(u=>u.id===user.id);
     if(!fresh || fresh.balanceDls<dls) return res.status(400).json({ok:false,error:'insufficient_balance'});
-    if(!rateLimit(`withdraw:${user.id}`,5,60000)) return res.status(429).json({ok:false,error:'rate_limited'});
+    if(!(await rateLimit(`withdraw:${user.id}`,5,60000))) return res.status(429).json({ok:false,error:'rate_limited'});
     const idempotencyKey=String(req.headers['idempotency-key']||'').trim().slice(0,128);
     const preflight=await load();
     if(idempotencyKey){ const prior=preflight.withdrawals.find(x=>x.userId===user.id&&x.idempotencyKey===idempotencyKey); if(prior) return res.json({ok:true,status:prior.status,withdrawalId:prior.id,user:publicUser(preflight.users.find(x=>x.id===user.id)),duplicate:true}); }
