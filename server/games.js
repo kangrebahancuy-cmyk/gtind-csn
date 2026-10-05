@@ -159,20 +159,26 @@ export function installGameRoutes(app, economy, options = {}) {
 
   app.get('/api/crash/state', async (req,res) =>{
     const user=await economy.sessionUser(req);
-    const own=user?[...crashGlobal.players.values()].find(p=>p.userId===user.id):null;
-    res.json({ok:true,state:publicCrashState(),userBet:own?{roundId:own.roundId,amountDls:own.amountDls,autoCashout:own.autoCashout,status:own.status,cashedAt:own.cashedAt||null,payoutDls:own.payoutDls||0}:null});
+    let state=publicCrashState(), own=user?[...crashGlobal.players.values()].find(p=>p.userId===user.id):null;
+    try {
+      const db=await getMongoDb();
+      const round=await db.collection('crashRounds').findOne({id:crashGlobal.roundId});
+      if(round){ Object.assign(crashGlobal,round); state=publicCrashState(); }
+      if(user) own=await db.collection('crashPlayers').findOne({roundId:crashGlobal.roundId,userId:user.id});
+    } catch {}
+    res.json({ok:true,state,userBet:own?{roundId:own.roundId,amountDls:own.amountDls,autoCashout:own.autoCashout,status:own.status,cashedAt:own.cashedAt||null,payoutDls:own.payoutDls||0}:null});
   });
   app.post('/api/crash/join', async (req,res) =>{
     const user=await requireUser(req,res);if(!user)return;
-    if(crashGlobal.phase!=='betting')return res.status(409).json({ok:false,error:'betting_closed'});
-    if(crashGlobal.players.has(user.id))return res.status(409).json({ok:false,error:'already_joined'});
+    const db=await getMongoDb(); const round=await db.collection('crashRounds').findOne({id:crashGlobal.roundId}); if(!round||round.phase!=='betting')return res.status(409).json({ok:false,error:'betting_closed'});
+    if(await db.collection('crashPlayers').findOne({roundId:round.id,userId:user.id}))return res.status(409).json({ok:false,error:'already_joined'});
     const amount=Number(req.body?.betDls),auto=Number(req.body?.autoCashout||0);
     if(!Number.isFinite(amount)||amount<=0||amount>100000000)return res.status(400).json({ok:false,error:'invalid_bet'});
     if(auto && (auto<1.01||auto>10000))return res.status(400).json({ok:false,error:'invalid_auto_cashout'});
     const debit=await economy.debitForGame(user.id,amount,'crash-global');
     if(!debit.ok)return res.status(400).json({ok:false,error:debit.error});
-    const p={userId:user.id,username:user.username,amountDls:amount,autoCashout:auto||0,status:'active',roundId:crashGlobal.roundId};
-    crashGlobal.players.set(user.id,p); persistCrash(); broadcast({type:'CRASH_PLAYER_JOINED',payload:{roundId:crashGlobal.roundId,username:user.username}});
+    const p={userId:user.id,username:user.username,amountDls:amount,autoCashout:auto||0,status:'active',roundId:round.id};
+    try { await db.collection('crashPlayers').insertOne({...p,createdAt:Date.now(),updatedAt:Date.now()}); } catch(e) { await economy.creditGameResult(user.id,amount,{id:round.id,gameId:'crash-global-join-refund',result:{outcome:'join_conflict'}}); return res.status(409).json({ok:false,error:'already_joined'}); } crashGlobal.players.set(user.id,p); persistCrash(); broadcast({type:'CRASH_PLAYER_JOINED',payload:{roundId:crashGlobal.roundId,username:user.username}});
     res.json({ok:true,state:publicCrashState(),userBet:{roundId:p.roundId,amountDls:amount,autoCashout:p.autoCashout,status:'active'},balanceDls:debit.balance});
   });
   app.post('/api/crash/cashout', async (req,res) =>{
