@@ -74,21 +74,26 @@ export function installGameRoutes(app, economy) {
     if(!round || round.userId!==user.id) return res.status(404).json({ok:false,error:'round_not_found'});
     if(round.status!=='ACTIVE') return res.status(409).json({ok:false,error:'round_already_resolved'});
     const action=req.body?.action && typeof req.body.action==='object' ? req.body.action : {};
-    const random=rng(round.serverSeed + ':' + round.clientSeed + ':' + round.nonce);
+    const step=Number.isInteger(action.step)?Math.max(0,action.step):0;
+    const random=rng(round.serverSeed + ':' + round.clientSeed + ':' + round.nonce + ':' + step);
     const result=resolveGame(round.gameId,random,action,round.betDls);
     const payout=Number((result.payout||0).toFixed(2));
-    const credit=economy.creditGameResult(user.id,payout,round);
-    if(!credit.ok) return res.status(500).json({ok:false,error:'credit_failed'});
-    round.status='RESOLVED'; round.result=result; round.payoutDls=payout;
-    round.resolvedAt=new Date().toISOString(); persist();
-    res.json({ok:true,roundId:round.id,result,payoutDls:payout,balanceDls:credit.balance,serverSeed:round.serverSeed,serverSeedHash:round.serverSeedHash,clientSeed:round.clientSeed,nonce:round.nonce});
+    const shouldCredit=action.cashout===true || action.final===true || !['coinflip'].includes(round.gameId);
+    let credit={ok:true,balance:round.balanceAfterBet};
+    if(shouldCredit){
+      credit=economy.creditGameResult(user.id,payout,round);
+      if(!credit.ok) return res.status(500).json({ok:false,error:'credit_failed'});
+      round.status='RESOLVED'; round.payoutDls=payout; round.resolvedAt=new Date().toISOString();
+    }
+    round.lastStep=step; round.result=result; persist();
+    res.json({ok:true,roundId:round.id,result,payoutDls:payout,balanceDls:credit.balance,finished:shouldCredit,serverSeed:shouldCredit?round.serverSeed:undefined,serverSeedHash:round.serverSeedHash,clientSeed:round.clientSeed,nonce:round.nonce});
   });
 }
 
 function resolveGame(gameId,r,action,bet) {
   switch(gameId) {
     case 'coinflip': {
-      const win=r()<0.5; return { outcome:win?'win':'loss', choice:action.choice||'heads', winningSide:win?(action.choice||'heads'):(action.choice==='heads'?'tails':'heads'), multiplier:win?1.96:0, payout:win?bet*1.96:0 };
+      const win=r()<0.5; const choice=action.choice||'heads'; const step=Math.max(0,Number(action.step)||0); const mults=[1.92,3.84,7.68,15.36,30.72,61.44,122.88,245.76,491.52]; const multiplier=mults[Math.min(step,mults.length-1)]||1.92; const cashout=action.cashout===true; const lossPayout=0; const payout=cashout?bet*(step>0?mults[Math.min(step-1,mults.length-1)]:1):0; return { outcome:win?'win':'loss', choice, winningSide:win?choice:(choice==='heads'?'tails':'heads'), step, multiplier:win?multiplier:0, payout:win?lossPayout:payout, cashedOut:cashout&&win };
     }
     case 'roulette': {
       const n=Math.floor(r()*37); const choice=String(action.choice??'0'); let win=false;
