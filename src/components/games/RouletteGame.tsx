@@ -38,6 +38,8 @@ export const RouletteGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     checkCanPlayGame,
     balance,
     showToast,
+    startGameRound,
+    resolveGameRound,
   } = useGame();
 
   const CHIP_VALUES = activeCurrency === 'BGLS' ? BGLS_CHIPS : DLS_CHIPS;
@@ -273,7 +275,7 @@ export const RouletteGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   }, []);
 
   // Spin the European Roulette Wheel
-  const spinWheel = () => {
+  const spinWheel = async () => {
     if (!user.isAuthenticated) {
       setAuthModalOpen(true);
       return;
@@ -282,15 +284,20 @@ export const RouletteGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     if (spinning || totalBetAmount <= 0) return;
 
     const totalBetDls = fromActiveAmount(totalBetAmount);
-    if (!deductBet(totalBetDls)) return;
+    if (!Number.isFinite(totalBetDls) || totalBetDls <= 0) return;
+    const started = await startGameRound('roulette', totalBetDls);
+    if (!started.success || !started.roundId) return;
 
     sound.playClick();
     setSpinning(true);
     setWinningNumber(null);
     setPayoutResult(null);
 
-    const winningIndex = Math.floor(Math.random() * EUROPEAN_WHEEL_NUMBERS.length);
-    const targetWinNumber = EUROPEAN_WHEEL_NUMBERS[winningIndex];
+    const resolvedPromise = resolveGameRound(started.roundId, { bets, currency: activeCurrency });
+    const resolved = await resolvedPromise;
+    if (!resolved.success || !resolved.result) return;
+    const targetWinNumber = Number(resolved.result.winningNumber);
+    const winningIndex = EUROPEAN_WHEEL_NUMBERS.indexOf(targetWinNumber);
 
     const startTime = Date.now();
     const duration = 3600;
@@ -340,41 +347,20 @@ export const RouletteGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         setWinningNumber(targetWinNumber);
         setSpinning(false);
 
-        let wonTotalDls = 0;
-        const targetColor = getNumberColor(targetWinNumber);
-
-        if (bets[`num_${targetWinNumber}`]) {
-          wonTotalDls += fromActiveAmount(bets[`num_${targetWinNumber}`]) * 36;
-        }
-        if (targetWinNumber >= 1 && targetWinNumber <= 12 && bets['1st_12']) {
-          wonTotalDls += fromActiveAmount(bets['1st_12']) * 3;
-        }
-        if (targetWinNumber >= 13 && targetWinNumber <= 24 && bets['2nd_12']) {
-          wonTotalDls += fromActiveAmount(bets['2nd_12']) * 3;
-        }
-        if (targetWinNumber >= 25 && targetWinNumber <= 36 && bets['3rd_12']) {
-          wonTotalDls += fromActiveAmount(bets['3rd_12']) * 3;
-        }
-        if (targetWinNumber > 0) {
-          if (targetWinNumber % 3 === 1 && bets['col_1']) wonTotalDls += fromActiveAmount(bets['col_1']) * 3;
-          if (targetWinNumber % 3 === 2 && bets['col_2']) wonTotalDls += fromActiveAmount(bets['col_2']) * 3;
-          if (targetWinNumber % 3 === 0 && bets['col_3']) wonTotalDls += fromActiveAmount(bets['col_3']) * 3;
-          if (targetColor === 'red' && bets['red']) wonTotalDls += fromActiveAmount(bets['red']) * 2;
-          if (targetColor === 'black' && bets['black']) wonTotalDls += fromActiveAmount(bets['black']) * 2;
-          if (targetWinNumber % 2 === 0 && bets['even']) wonTotalDls += fromActiveAmount(bets['even']) * 2;
-          if (targetWinNumber % 2 === 1 && bets['odd']) wonTotalDls += fromActiveAmount(bets['odd']) * 2;
-          if (targetWinNumber <= 18 && bets['1_to_18']) wonTotalDls += fromActiveAmount(bets['1_to_18']) * 2;
-          if (targetWinNumber >= 19 && bets['19_to_36']) wonTotalDls += fromActiveAmount(bets['19_to_36']) * 2;
-        }
-
+        const wonTotalDls = Number(resolved.payoutDls || 0);
         if (wonTotalDls > 0) {
-          const effectiveMultiplier = Number((wonTotalDls / totalBetDls).toFixed(2));
-          awardPayout(wonTotalDls, 'Roulette', effectiveMultiplier, totalBetDls);
           setPayoutResult({ totalWin: wonTotalDls, won: true });
           sound.playCashout();
           sound.playWin();
         } else {
-          recordLoss(totalBetDls, 'Roulette');
+          setPayoutResult({ totalWin: 0, won: false });
+          sound.playExplosion();
+        }
+
+        setPayoutResult({ totalWin: wonTotalDls, won: true });
+          sound.playCashout();
+          sound.playWin();
+        } else {
           setPayoutResult({ totalWin: 0, won: false });
           sound.playExplosion();
         }

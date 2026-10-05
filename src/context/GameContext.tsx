@@ -41,6 +41,7 @@ export interface UserCrashBet {
   autoCashout: number;
   cashedAt?: number;
   status: 'queued' | 'active' | 'cashed' | 'busted';
+  roundId?: string;
 }
 
 export interface CrashRoomState {
@@ -111,6 +112,8 @@ interface GameContextType {
   deductBet: (dlsAmount: number) => boolean;
   awardPayout: (dlsPayout: number, gameName: string, multiplier: number, betDls: number) => void;
   recordLoss: (betDls: number, gameName: string) => void;
+  startGameRound: (gameId: string, betDls: number, clientSeed?: string, options?: Record<string, unknown>) => Promise<{ success:boolean; roundId?:string; serverSeedHash?:string; message?:string; balanceDls?:number }>;
+  resolveGameRound: (roundId: string, action: Record<string, unknown>) => Promise<{ success:boolean; result?:any; payoutDls?:number; balanceDls?:number; finished?:boolean; serverSeed?:string; serverSeedHash?:string; message?:string }>;
 
   // Live Bets
   liveBets: LiveBet[];
@@ -615,6 +618,31 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, 2500);
   };
 
+  const startGameRound = async (gameId: string, betDls: number, clientSeed?: string, options: Record<string, unknown> = {}) => {
+    if (!currentUserRef.current) return {success:false,message:'Please Sign In first.'};
+    try {
+      const {response,data}=await apiJson('/api/games/start',{method:'POST',body:JSON.stringify({gameId,betDls,clientSeed,...options})});
+      if(!response.ok) return {success:false,message:data.error||'Unable to start game.'};
+      if(data.balanceDls !== undefined){
+        const u={...currentUserRef.current,balanceDls:Number(data.balanceDls)};
+        setCurrentUser(u); currentUserRef.current=u;
+      }
+      return {success:true,roundId:data.roundId,serverSeedHash:data.serverSeedHash,balanceDls:data.balanceDls};
+    } catch { return {success:false,message:'Game server tidak merespons.'}; }
+  };
+
+  const resolveGameRound = async (roundId: string, action: Record<string, unknown>) => {
+    try {
+      const {response,data}=await apiJson('/api/games/resolve',{method:'POST',body:JSON.stringify({roundId,action})});
+      if(!response.ok) return {success:false,message:data.error||'Unable to resolve game.'};
+      if(data.balanceDls !== undefined){
+        const u={...currentUserRef.current!,balanceDls:Number(data.balanceDls)};
+        setCurrentUser(u); currentUserRef.current=u;
+      }
+      return {success:true,result:data.result,payoutDls:data.payoutDls,balanceDls:data.balanceDls,finished:data.finished,serverSeed:data.serverSeed,serverSeedHash:data.serverSeedHash};
+    } catch { return {success:false,message:'Game server tidak merespons.'}; }
+  };
+
   const canAfford = (dlsAmount: number) => {
     if (!currentUser) return false;
     return balanceDls >= dlsAmount && dlsAmount > 0;
@@ -1044,8 +1072,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
           // Check if active user busted
           if (userBetRef.current && userBetRef.current.status === 'active') {
-            setUserCrashBet({ ...userBetRef.current, status: 'busted' });
-            recordLoss(userBetRef.current.amountDls, 'Crash');
+            const rb=userBetRef.current;
+            if(rb.roundId) fetch('/api/games/resolve',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({roundId:rb.roundId,action:{type:'tick'}})}).then(()=>{});
+            setUserCrashBet({ ...rb, status: 'busted' });
             sound.playExplosion();
           }
 
@@ -1062,11 +1091,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // Check user auto-cashout
           if (userBetRef.current && userBetRef.current.status === 'active') {
             if (userBetRef.current.autoCashout > 1.01 && mult >= userBetRef.current.autoCashout) {
-              const wonAmount = userBetRef.current.amountDls * userBetRef.current.autoCashout;
-              awardPayout(wonAmount, 'Crash', userBetRef.current.autoCashout, userBetRef.current.amountDls);
-              setUserCrashBet({ ...userBetRef.current, status: 'cashed', cashedAt: userBetRef.current.autoCashout });
-              sound.playCashout();
-              sound.playWin();
+              const rb=userBetRef.current;
+              if(rb.roundId) fetch('/api/games/resolve',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({roundId:rb.roundId,action:{type:'cashout'}})}).then(r=>r.json()).then(d=>{if(d?.ok&&d.result?.outcome==='win'){setUserCrashBet({...rb,status:'cashed',cashedAt:Number(d.result.current||rb.autoCashout)});setCurrentUser(prev=>prev?{...prev,balanceDls:Number(d.balanceDls??prev.balanceDls)}:prev);sound.playCashout();sound.playWin();}});
             }
           }
         }
@@ -1077,36 +1103,35 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [crashPhase]);
 
   const joinNextRound = (betDls: number, autoCashout: number): boolean => {
-    if (!currentUser) {
-      setAuthMode('login');
-      setAuthModalOpen(true);
-      return false;
-    }
-    if (betDls <= 0 || !deductBet(betDls)) return false;
-
-    const newBet: UserCrashBet = {
-      amountDls: betDls,
-      autoCashout: autoCashout > 1.01 ? autoCashout : 0,
-      status: crashPhase === 'betting' ? 'queued' : 'queued',
-    };
-    setUserCrashBet(newBet);
+    if (!currentUser) { setAuthMode('login'); setAuthModalOpen(true); return false; }
+    if (betDls <= 0) return false;
+    fetch('/api/games/start',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({gameId:'crash',betDls})})
+      .then(r=>r.json()).then(d=>{
+        if(!d?.ok||!d.roundId){showToast(d?.error||'Unable to join Crash round','error','Crash');return;}
+        setUserCrashBet({amountDls:betDls,autoCashout:autoCashout>1.01?autoCashout:0,status:'active',roundId:d.roundId});
+        setCurrentUser(prev=>prev?{...prev,balanceDls:Number(d.balanceDls??prev.balanceDls)}:prev);
+      }).catch(()=>showToast('Unable to join Crash round','error','Crash'));
     return true;
   };
 
   const cancelQueuedBet = () => {
-    if (userCrashBet && userCrashBet.status === 'queued') {
-      updateCurrentUserBalance(balanceDls + userCrashBet.amountDls);
+    const rb=userCrashBet;
+    if(rb?.status==='queued'&&rb.roundId){
+      fetch('/api/games/resolve',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({roundId:rb.roundId,action:{type:'cancel'}})}).then(r=>r.json()).then(d=>{if(d?.ok)setCurrentUser(prev=>prev?{...prev,balanceDls:Number(d.balanceDls??prev.balanceDls)}:prev);});
       setUserCrashBet(null);
     }
   };
 
   const cashoutActiveBet = () => {
-    if (userCrashBet && userCrashBet.status === 'active' && crashPhase === 'flying') {
-      const payout = userCrashBet.amountDls * crashMultiplier;
-      awardPayout(payout, 'Crash', crashMultiplier, userCrashBet.amountDls);
-      setUserCrashBet({ ...userCrashBet, status: 'cashed', cashedAt: crashMultiplier });
-      sound.playCashout();
-      sound.playWin();
+    const rb=userCrashBet;
+    if(rb?.status==='active'&&rb.roundId){
+      fetch('/api/games/resolve',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({roundId:rb.roundId,action:{type:'cashout'}})})
+        .then(r=>r.json()).then(d=>{
+          if(!d?.ok){showToast(d?.error||'Cashout failed','error','Crash');return;}
+          setCurrentUser(prev=>prev?{...prev,balanceDls:Number(d.balanceDls??prev.balanceDls)}:prev);
+          if(d.result?.outcome==='win'){setUserCrashBet({...rb,status:'cashed',cashedAt:Number(d.result.current||1)});sound.playCashout();sound.playWin();}
+          else {setUserCrashBet({...rb,status:'busted'});sound.playExplosion();}
+        });
     }
   };
 
