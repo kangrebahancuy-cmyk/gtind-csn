@@ -135,7 +135,7 @@ export function unlinkGrowId(growId) {
   return publicUser(user);
 }
 
-export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret }) {
+export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadcast }) {
   app.get('/api/auth/me', (req, res) => {
     const user = sessionUser(req);
     res.json({ ok: true, authenticated: Boolean(user), user: publicUser(user) });
@@ -332,6 +332,9 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret }) {
     mutateBalance(db,user,dls,'DEPOSIT',ref,{growId,currency,amount});
     const deposit={transactionId,growId,userId:user.id,username:user.username,currency,amount,amountDls:dls,status:'COMPLETED',createdAt:now()};
     db.deposits.push(deposit); save(db);
+    if (typeof broadcast === 'function') {
+      broadcast({ type:'GTPS_DEPOSIT', payload:{ growId, currency, amount, transactionId, timestamp:Date.now() } });
+    }
     res.json({ok:true,duplicate:false,deposit,user:publicUser(user)});
   });
 
