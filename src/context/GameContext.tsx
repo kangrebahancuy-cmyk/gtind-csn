@@ -936,10 +936,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   }
                 } catch {}
               }
-          } catch {}
-        };
+          };
 
-        ws.onclose = () => {
+         ws.onclose = () => {
           reconnectTimeout = setTimeout(connect, 4000);
         };
         ws.onerror = () => {
