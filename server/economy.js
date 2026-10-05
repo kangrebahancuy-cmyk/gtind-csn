@@ -444,19 +444,47 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     const admin=await requireAdmin(req,res); if(!admin)return;
     const action=String(req.body?.action||'');
     if(!['complete','fail_refund'].includes(action)) return res.status(400).json({ok:false,error:'invalid_reconcile_action'});
-    const db=await load();
-    const w=(db.withdrawals||[]).find(x=>x.id===String(req.params.id));
-    if(!w) return res.status(404).json({ok:false,error:'withdrawal_not_found'});
-    if(!['PENDING','UNKNOWN'].includes(w.status)) return res.status(409).json({ok:false,error:'withdrawal_already_final'});
-    const user=db.users.find(x=>x.id===w.userId);
-    if(!user) return res.status(404).json({ok:false,error:'user_not_found'});
-    if(action==='complete') {
-      w.status='COMPLETED'; w.reconciledBy=admin.username; w.reconciledAt=now(); await save(db);
-      return res.json({ok:true,status:w.status,withdrawal:w});
+    const withdrawalId=String(req.params.id);
+    try {
+      const result=await withMongoTransaction(async (session,mongo)=>{
+        const w=await mongo.collection('withdrawals').findOne({id:withdrawalId},{session});
+        if(!w)return {error:'withdrawal_not_found'};
+        if(!['PENDING','UNKNOWN'].includes(w.status))return {error:'withdrawal_already_final',status:w.status};
+        const user=await mongo.collection('users').findOne({id:w.userId},{session});
+        if(!user)return {error:'user_not_found'};
+
+        const changed=await mongo.collection('withdrawals').updateOne(
+          {id:withdrawalId,status:{$in:['PENDING','UNKNOWN']}},
+          {$set:{status:action==='complete'?'COMPLETED':'FAILED',reconciledBy:admin.username,reconciledAt:new Date()}},
+          {session}
+        );
+        if(changed.modifiedCount!==1)return {error:'withdrawal_already_final'};
+
+        if(action==='fail_refund'){
+          const wallet=await mongo.collection('wallets').findOne({userId:w.userId},{session});
+          const before=Number(wallet?.balanceDls||0);
+          const amount=Number(w.amountDls||0);
+          const after=Number((before+amount).toFixed(2));
+          await mongo.collection('wallets').updateOne({userId:w.userId},{$set:{balanceDls:after,updatedAt:new Date()}},{session});
+          await mongo.collection('ledger').insertOne({
+            id:id('txn'),userId:w.userId,username:user.username,type:'WITHDRAW_REFUND',
+            amountDls:amount,balanceBefore:before,balanceAfter:after,referenceId:w.id,
+            metadata:{reason:'admin_reconciliation',admin:admin.username},createdAt:new Date()
+          },{session});
+          return {ok:true,status:'FAILED',balance:after};
+        }
+        return {ok:true,status:'COMPLETED'};
+      });
+      if(result.error==='withdrawal_not_found')return res.status(404).json({ok:false,error:result.error});
+      if(result.error)return res.status(409).json({ok:false,error:result.error,status:result.status});
+      const db=await load();
+      const w=(db.withdrawals||[]).find(x=>x.id===withdrawalId);
+      const user=db.users.find(x=>x.id===w?.userId);
+      res.json({ok:true,status:result.status,withdrawal:w,user:user?publicUser(user):undefined,balance:result.balance});
+    } catch(error) {
+      console.error('[withdrawal-reconcile]',error);
+      res.status(500).json({ok:false,error:'reconciliation_failed'});
     }
-    mutateBalance(db,user,Number(w.amountDls),'WITHDRAW_REFUND',w.id,{reason:'admin_reconciliation',admin:admin.username});
-    w.status='FAILED'; w.reconciledBy=admin.username; w.reconciledAt=now(); await save(db);
-    res.json({ok:true,status:w.status,withdrawal:w,user:publicUser(user)});
   });
 
   app.post('/api/gtps/deposit-webhook', async (req,res) => {
