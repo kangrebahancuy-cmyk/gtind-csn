@@ -293,7 +293,7 @@ export const RouletteGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     setWinningNumber(null);
     setPayoutResult(null);
 
-    const resolvedPromise = resolveGameRound(started.roundId, { bets });
+    const resolvedPromise = resolveGameRound(started.roundId, { bets, currency: activeCurrency });
     const resolved = await resolvedPromise;
     if (!resolved.success || !resolved.result) return;
     const targetWinNumber = Number(resolved.result.winningNumber);
