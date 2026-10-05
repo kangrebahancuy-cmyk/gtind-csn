@@ -1,6 +1,6 @@
 # GTIND-CSN Phase 4 — Production Hardening
 
-Status: **DONE — production hardening completed and CI verification pending final run.**
+Status: **DONE — production hardening completed and CI #76 passed.**
 
 Phase 4 focuses on removing remaining local authoritative state and strengthening game integrity after the MongoDB Atlas migration.
 
@@ -28,4 +28,4 @@ Phase 4 focuses on removing remaining local authoritative state and strengthenin
 - Server startup waits for game-authority initialization.
 - Regression tests no longer depend on the obsolete SQLite session store.
 
-Phase 4 is considered complete after the final CI build, regression tests, and syntax checks pass.
+Final verification: CI #76 passed production build, regression tests, and all Node syntax checks.
