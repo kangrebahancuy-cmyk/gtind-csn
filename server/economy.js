@@ -17,12 +17,24 @@ function ensureStore() {
 }
 function load() {
   ensureStore();
+  let db;
   try {
     const value = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    return { users: [], transactions: [], deposits: [], withdrawals: [], ...value };
+    db = { users: [], transactions: [], deposits: [], withdrawals: [], ...value };
   } catch {
-    return { users: [], transactions: [], deposits: [], withdrawals: [] };
+    db = { users: [], transactions: [], deposits: [], withdrawals: [] };
   }
+  const adminUsername = String(process.env.ADMIN_USERNAME || '').trim();
+  const adminPassword = String(process.env.ADMIN_PASSWORD || '');
+  if (adminUsername && adminPassword && !db.users.some(u => normalizeUsername(u.username) === normalizeUsername(adminUsername))) {
+    db.users.push({
+      id:id('usr'), username:adminUsername, passwordHash:hashPassword(adminPassword),
+      balanceDls:0, linkCode:uniqueLinkCode(db), isBanned:false, isMuted:false,
+      isAdmin:true, createdAt:now()
+    });
+    save(db);
+  }
+  return db;
 }
 function save(db) {
   ensureStore();
