@@ -42,6 +42,7 @@ Important:
 ## Validation
 - Added GitHub Actions CI for Vite build and Node syntax checks.
 - Game payout settlement is idempotent by round ID in the economy ledger.
+- Regression tests cover deterministic RNG, Blackjack deck/scoring, Mines, Roulette, Keno, and Crash.
 
 ## Production requirement
 Phase 2 game authority is complete at the application-logic level, but production/high-value wagering must wait for transactional persistent storage, concurrency control, and a true shared Crash/PvP matchmaking service.
