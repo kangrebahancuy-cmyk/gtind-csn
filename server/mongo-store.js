@@ -27,7 +27,7 @@ leases:[[{_id:1},{unique:true,name:'uniq_lease_id'}]],
 caseBattles:[[{id:1},{unique:true,name:'uniq_case_battle_id'}],[{status:1,createdAt:-1},{name:'idx_case_battle_lobby'}]],
 crashRounds:[[{id:1},{unique:true,name:'uniq_crash_round_id'}],[{phase:1},{name:'idx_crash_phase'}]],
 crashPlayers:[[{roundId:1,userId:1},{unique:true,name:'uniq_crash_round_player'}]],
-auditLogs:[[{id:1},{unique:true,name:'uniq_audit_id'}],[{actorUserId:1,createdAt:-1},{name:'idx_audit_actor_created'}]],
+auditLogs:[[{id:1},{unique:true,name:'uniq_audit_id'}],[{actorUserId:1,createdAt:-1},{name:'idx_audit_actor_created'}],[{action:1,createdAt:-1},{name:'idx_audit_action_created'}],[{targetUserId:1,createdAt:-1},{name:'idx_audit_target_created'}]],
 rateLimits:[[{key:1},{unique:true,name:'uniq_rate_limit_key'}],[{expiresAt:1},{expireAfterSeconds:0,name:'ttl_rate_limits'}]],
 realtimeEvents:[[{id:1},{unique:true,name:'uniq_realtime_event_id'}],[{createdAt:-1},{name:'idx_realtime_created'}]],
 profiles:[[{userId:1},{unique:true,name:'uniq_profile_user'}],[{username:1},{name:'idx_profile_username'}]],
@@ -40,7 +40,7 @@ export async function ensureMongoSchema(){
  const db=await getMongoDb();
  for(const [name,oldIndex] of [['ledger','uniq_ledger_reference'],['withdrawals','uniq_withdrawal_idempotency']]) { try { await db.collection(name).dropIndex(oldIndex); } catch {} }
  for(const [name,indexes] of Object.entries(INDEXES)) for(const [key,options] of indexes) await db.collection(name).createIndex(key,options);
- await db.collection('meta').updateOne({_id:'schema'},{$set:{version:6,updatedAt:new Date()}},{upsert:true});
+ await db.collection('meta').updateOne({_id:'schema'},{$set:{version:7,updatedAt:new Date()}},{upsert:true});
  return db;
 }
 export async function withMongoTransaction(work){
