@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { User, Trophy, TrendingUp, Coins, ShieldCheck, Copy, Check, Sparkles } from 'lucide-react';
 import { useGame } from '../../context/GameContext';
 import { sound } from '../../utils/audio';
@@ -6,6 +6,8 @@ import { sound } from '../../utils/audio';
 export const PlayerProfileCard: React.FC = () => {
   const { user, balance, currencyLabel, formatBalance, toActiveAmount } = useGame();
   const [copied, setCopied] = useState(false);
+  const [progression, setProgression] = useState<any>(null);
+  useEffect(() => { if (!user.isAuthenticated) return; fetch('/api/profile/me',{credentials:'include'}).then(r=>r.json()).then(d=>{if(d.ok)setProgression(d.progression);}).catch(()=>{}); }, [user.isAuthenticated, user.username]);
 
   const handleCopyId = () => {
     sound.playClick();
@@ -14,8 +16,15 @@ export const PlayerProfileCard: React.FC = () => {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const wageredDls = 48920;
-  const profitDls = 14350;
+  const wageredDls = Number(progression?.stats?.wageredDls || 0);
+  const profitDls = Number(progression?.stats?.netProfitDls || 0);
+  const level = Number(progression?.progression?.level || 1);
+  const xpInto = Number(progression?.progression?.xpIntoLevel || 0);
+  const xpNext = Number(progression?.progression?.xpToNextLevel || 100);
+  const tier = progression?.progression?.tier?.name || 'Bronze';
+  const wins = Number(progression?.stats?.wins || 0);
+  const totalGames = Number(progression?.stats?.totalGames || 0);
+  const winRate = totalGames ? (wins / totalGames) * 100 : 0;
 
   return (
     <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#0d1624] via-[#101b2d] to-[#0a1019] border border-[#1e2f47] p-5 shadow-2xl group transition-all duration-300 hover:border-[#0074e4]/60">
@@ -49,7 +58,7 @@ export const PlayerProfileCard: React.FC = () => {
               </h3>
               <span className="text-[10px] font-black uppercase tracking-wider text-[#00ff88] bg-[#00ff88]/15 px-2 py-0.5 rounded-md border border-[#00ff88]/30 flex items-center gap-1">
                 <ShieldCheck className="w-3 h-3" />
-                <span>Verified VIP</span>
+                <span>{tier} • Level {level}</span>
               </span>
             </div>
 
@@ -106,7 +115,7 @@ export const PlayerProfileCard: React.FC = () => {
               <Sparkles className="w-3 h-3 text-purple-400" /> Win Rate
             </span>
             <span className="text-xs sm:text-sm font-mono font-black text-purple-300">
-              64.8% (342 W)
+              {winRate.toFixed(1)}% ({wins} W)
             </span>
           </div>
         </div>
