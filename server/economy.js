@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { getMongoDb, withMongoTransaction } from './mongo-store.js';
+import { recordGameActivity, recordGameOutcome } from './progression.js';
 const rateBuckets = new Map();
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_BODY_AMOUNT = 100000000;
@@ -200,6 +201,7 @@ export async function debitForGame(userId, amount, gameId) {
       const after=Number((before-n).toFixed(2));
       await mongo.collection('wallets').updateOne({userId,balanceDls:before},{$set:{balanceDls:after,updatedAt:new Date()}},{session});
       await mongo.collection('ledger').insertOne({id:id('txn'),userId,username:user.username,type:'BET',amountDls:-n,balanceBefore:before,balanceAfter:after,referenceId:ref,metadata:{gameId},createdAt:new Date()},{session});
+      await recordGameActivity(session,mongo,{userId,username:user.username,gameId,betDls:n,referenceId:ref});
       return {ok:true,balance:after,referenceId:ref};
     });
   } catch(error) { if(error.code==='ECONOMY_WRITE_CONFLICT') return {ok:false,error:'economy_write_conflict'}; throw error; }
@@ -217,6 +219,7 @@ export async function creditGameResult(userId, amount, round) {
     const after=Number((before+n).toFixed(2));
     await mongo.collection('wallets').updateOne({userId,balanceDls:before},{$set:{balanceDls:after,updatedAt:new Date()}},{session});
     await mongo.collection('ledger').insertOne({id:id('txn'),userId,username:user.username,type:'GAME_PAYOUT',amountDls:n,balanceBefore:before,balanceAfter:after,referenceId:round.id,metadata:{gameId:round.gameId,multiplier:round.result?.multiplier||0},createdAt:new Date()},{session});
+    if(Number(round?.betDls||0)>0) await recordGameOutcome(session,mongo,{userId,username:user.username,gameId:round.gameId,roundId:round.id,betDls:Number(round.betDls),payoutDls:n});
     return {ok:true,balance:after};
   });
 }
