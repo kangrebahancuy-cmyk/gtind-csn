@@ -480,42 +480,18 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Lepas link GTPS dari web: server + bridge Lua ikut dilepas
   const unlinkGtps = async (): Promise<{ success: boolean; message: string }> => {
     const cu = currentUserRef.current;
-    if (!cu) return { success: false, message: 'Please Sign In first.' };
-    if (!cu.gtpsLinked || !cu.growId) return { success: false, message: 'Akun belum ter-link dengan GTPS.' };
-
+    if (!cu) return { success:false, message:'Please Sign In first.' };
+    if (!cu.gtpsLinked || !cu.growId) return { success:false, message:'Akun belum ter-link dengan GTPS.' };
     try {
-      const res = await fetch('/api/gtps/unlink-web', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: cu.linkCode, growId: cu.growId }),
-      });
-      const data = await res.json().catch(() => ({ ok: false }));
-      if (!data.ok) {
-        showToast('Gagal unlink. Pastikan server casino sudah versi terbaru, lalu coba lagi.', 'error', 'Unlink Gagal');
-        return { success: false, message: 'Gagal unlink. Coba lagi.' };
-      }
+      const { response, data } = await apiJson('/api/account/unlink-growid', { method:'POST', body:'{}' });
+      if (!response.ok || !data.user) return { success:false, message:'Gagal unlink. Coba lagi.' };
+      setCurrentUser(data.user); currentUserRef.current = data.user;
+      setAccounts(prev => prev.map(a => a.username.toLowerCase() === data.user.username.toLowerCase() ? data.user : a));
+      showToast('Akun GTPS berhasil di-unlink. Saldo casino tetap aman.', 'success', 'GTPS Unlinked');
+      return {success:true,message:'Akun GTPS berhasil di-unlink.'};
     } catch {
-      showToast('Server casino tidak merespons. Coba lagi.', 'error', 'Unlink Gagal');
-      return { success: false, message: 'Server casino tidak merespons.' };
+      return {success:false,message:'Server casino tidak merespons.'};
     }
-
-    const updated = { ...cu, growId: undefined, gtpsLinked: false };
-    setCurrentUser(updated);
-    try {
-      localStorage.setItem('supreme_active_session', JSON.stringify(updated));
-      localStorage.setItem('voidps_active_session', JSON.stringify(updated));
-    } catch {}
-    setAccounts((prev) => {
-      const next = prev.map((a) =>
-        a.username.toLowerCase() === cu.username.toLowerCase() ? { ...a, growId: undefined } : a
-      );
-      try {
-        localStorage.setItem('supreme_registered_accounts', JSON.stringify(next));
-      } catch {}
-      return next;
-    });
-    showToast('Akun GTPS berhasil di-unlink. Saldo casino tetap aman.', 'success', 'GTPS Unlinked');
-    return { success: true, message: 'Akun GTPS berhasil di-unlink.' };
   };
 
   // Sync user verification code to GTPS backend router
