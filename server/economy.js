@@ -98,6 +98,31 @@ function requireAdmin(req, res) {
   return user;
 }
 
+export function linkGrowIdByCode(code, growId) {
+  const cleanCode = String(code || '').trim();
+  const cleanGrowId = String(growId || '').trim();
+  if (!cleanCode || !cleanGrowId) return null;
+  const db = load();
+  const user = db.users.find(u => u.linkCode === cleanCode);
+  if (!user) return null;
+  user.growId = cleanGrowId;
+  user.gtpsLinked = true;
+  save(db);
+  return publicUser(user);
+}
+
+export function unlinkGrowId(growId) {
+  const clean = String(growId || '').trim().toLowerCase();
+  if (!clean) return null;
+  const db = load();
+  const user = db.users.find(u => String(u.growId || '').toLowerCase() === clean);
+  if (!user) return null;
+  user.growId = undefined;
+  user.gtpsLinked = false;
+  save(db);
+  return publicUser(user);
+}
+
 export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret }) {
   app.get('/api/auth/me', (req, res) => {
     const user = sessionUser(req);
@@ -169,6 +194,53 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret }) {
     const token=crypto.randomBytes(32).toString('hex'); sessions.set(token,user.id);
     res.setHeader('Set-Cookie',`gtind_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`);
     res.json({ok:true,user:publicUser(user),legacyBalanceIgnored:legacyBalance});
+  });
+
+  app.post('/api/account/growid', (req,res) => {
+    const user=requireAuth(req,res); if(!user)return;
+    const growId=String(req.body?.growId||'').trim();
+    if(!growId) return res.status(400).json({ok:false,error:'invalid_growid'});
+    const db=load(); const fresh=db.users.find(u=>u.id===user.id);
+    const collision=db.users.find(u=>u.id!==fresh.id && String(u.growId||'').toLowerCase()===growId.toLowerCase());
+    if(collision) return res.status(409).json({ok:false,error:'growid_already_linked'});
+    fresh.growId=growId; fresh.gtpsLinked=true; save(db);
+    res.json({ok:true,user:publicUser(fresh)});
+  });
+
+  app.post('/api/gtps/register-code', (req,res) => {
+    const username=String(req.body?.username||'').trim();
+    const code=String(req.body?.code||'').trim();
+    if(!username || !code) return res.status(400).json({ok:false,error:'invalid_link_code'});
+    const db=load(); const user=findUser(db,username);
+    if(!user || user.linkCode!==code) return res.status(403).json({ok:false,error:'invalid_link_code'});
+    res.json({ok:true,code,registered:true,username:user.username,growId:user.growId||null});
+  });
+
+  app.get('/api/gtps/check-link', (req,res) => {
+    const code=String(req.query.code||'').trim();
+    const db=load(); const user=db.users.find(u=>u.linkCode===code);
+    if(!user) return res.json({linked:false,code});
+    res.json({linked:Boolean(user.gtpsLinked&&user.growId),growId:user.growId||null,registered:true,username:user.username,code});
+  });
+
+  app.post('/api/gtps/link-growid', (req,res) => {
+    const secret=String(req.body?.secretKey||req.headers['x-gtps-secret']||'');
+    if(!secret || secret!==getGtpsSecret()) return res.status(403).json({ok:false,error:'invalid_secret_key'});
+    const code=String(req.body?.code||'').trim(); const growId=String(req.body?.growid||'').trim();
+    if(!code || !growId) return res.status(400).json({ok:false,error:'invalid_link'});
+    const db=load(); const user=db.users.find(u=>u.linkCode===code);
+    if(!user) return res.status(404).json({ok:false,error:'invalid_link_code'});
+    const collision=db.users.find(u=>u.id!==user.id && String(u.growId||'').toLowerCase()===growId.toLowerCase());
+    if(collision) return res.status(409).json({ok:false,error:'growid_already_linked'});
+    user.growId=growId; user.gtpsLinked=true; save(db);
+    res.json({ok:true,success:true,growId,code,user:publicUser(user)});
+  });
+
+  app.post('/api/gtps/unlink', (req,res) => {
+    const secret=String(req.body?.secretKey||req.headers['x-gtps-secret']||'');
+    if(!secret || secret!==getGtpsSecret()) return res.status(403).json({ok:false,error:'invalid_secret_key'});
+    const result=unlinkGrowId(req.body?.growid);
+    res.json({ok:true,success:true,growId:req.body?.growid,found:Boolean(result)});
   });
 
   app.get('/api/economy/wallet', (req,res) => {
