@@ -98,7 +98,7 @@ export function installGameRoutes(app, economy, options = {}) {
     } else if(crashGlobal.phase==='flying'){
       crashGlobal.multiplier=Number(Math.max(1,Math.exp(0.065*((now-crashGlobal.startedAt)/1000)*1.5)).toFixed(2));
       for(const p of crashGlobal.players.values()){
-        if(p.status==='active' && p.autoCashout>1.01 && crashGlobal.multiplier>=p.autoCashout) settleCrashPlayer(p,true);
+        if(p.status==='active' && p.autoCashout>1.01 && crashGlobal.multiplier>=p.autoCashout) void settleCrashPlayer(p,true);
       }
       if(crashGlobal.multiplier>=crashGlobal.crashPoint){
         crashGlobal.multiplier=crashGlobal.crashPoint; crashGlobal.phase='crashed';
@@ -125,6 +125,7 @@ export function installGameRoutes(app, economy, options = {}) {
   }
   async function settleCrashPlayer(p,auto=false){
     if(p.status!=='active')return null;
+    p.status='settling';
     const multiplier=auto?Math.max(1,crashGlobal.multiplier):Math.max(1,crashGlobal.multiplier);
     const result=await economy.creditGameResult(p.userId,p.amountDls*multiplier,{id:p.roundId,gameId:'crash-global',result:{outcome:'win',current:multiplier,multiplier}});
     if(!result.ok)return null;
