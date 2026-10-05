@@ -143,28 +143,6 @@ app.post('/api/gtps/unlink', (req, res) => {
 // Tombol Unlink di wallet web -> lepas link web + bridge ke Lua
 // Validasi: kode link harus terdaftar (kode di-re-register tiap wallet dibuka),
 // jadi unlink tetap jalan meski cache link di memori hilang setelah restart.
-app.post('/api/gtps/unlink-web', async (req, res) => {
-  const cleanGrowId = String(req.body?.growId || '').trim();
-  if (!cleanGrowId) return res.status(400).json({ ok:false, error:'growId wajib' });
-  const result = unlinkGrowId(cleanGrowId);
-  if (!result) return res.status(404).json({ ok:false, error:'growid_not_found' });
-
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    await fetch(`${GTPS_BRIDGE_URL}/supreme/unlink`, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ secretKey:gtpsConfig.secretKey, growId:cleanGrowId }),
-      signal:controller.signal,
-    });
-    clearTimeout(timeoutId);
-  } catch {}
-
-  broadcast({ type:'GTPS_UNLINK', payload:{ growId:cleanGrowId, timestamp:Date.now() } });
-  res.json({ ok:true, growId:cleanGrowId, user:result });
-});
-
 // Real-Time WebSocket Server
 const wss = new WebSocketServer({ server, path: '/ws' });
 
