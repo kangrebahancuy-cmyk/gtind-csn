@@ -40,6 +40,11 @@ let gtpsConfig = {
   activeSyncCount: 0,
 };
 
+// Bridge ke Lua onHTTPRequest di server GTPS gtps.cloud.
+// Ganti lewat env GTPS_PORT kalau port server berubah.
+const GTPS_BRIDGE_PORT = process.env.GTPS_PORT || 18876;
+const GTPS_BRIDGE_URL = `https://api.gtps.cloud/g-api/${GTPS_BRIDGE_PORT}`;
+
 // GTPS API Endpoints
 app.get('/api/gtps/status', (req, res) => {
   res.json({
@@ -96,62 +101,26 @@ app.post('/api/gtps/register-code', (req, res) => {
     timestamp: Date.now(),
   });
 
-  // Forward to GTPS Server HTTP Router on port 25741 if available
-  const payload = JSON.stringify({
-    users: [{ username: username || 'User', code: cleanCode, linkedGrowId: growId || null }],
-  });
-
-  fetch(`http://127.0.0.1:${gtpsConfig.port}/`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: payload,
-  }).catch(() => {});
-
   res.json({ success: true, code: cleanCode, registered: true });
 });
 
-app.get('/api/gtps/check-link', async (req, res) => {
+// Lua menanyakan status kode saat player /link <kode>.
+// registered:true + username dipakai Lua untuk menamai akun casino di sisi game.
+app.get('/api/gtps/check-link', (req, res) => {
   const code = String(req.query.code || '').trim();
   if (!code) return res.json({ linked: false });
 
-  // 1. Check local cache
+  // 1. Sudah pernah link (webhook dari Lua pernah masuk)
   if (linkedGrowIds.has(code)) {
     const growId = linkedGrowIds.get(code);
     return res.json({ linked: true, growId, code });
   }
 
-  // 2. Poll GTPS Server on port 25741
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 1500);
-    const gtpsRes = await fetch(`http://127.0.0.1:${gtpsConfig.port}/`, { signal: controller.signal });
-    clearTimeout(timeoutId);
-
-    if (gtpsRes.ok) {
-      const data = await gtpsRes.json();
-      if (Array.isArray(data.pendingLinks)) {
-        for (const link of data.pendingLinks) {
-          if (String(link.code).trim() === code && link.growId) {
-            linkedGrowIds.set(code, link.growId);
-            broadcast({
-              type: 'GTPS_LINK',
-              payload: { growId: link.growId, code, timestamp: Date.now() },
-            });
-            return res.json({ linked: true, growId: link.growId, code });
-          }
-        }
-      }
-      if (data.websiteUsers && data.websiteUsers[code] && data.websiteUsers[code].linkedGrowId) {
-        const growId = data.websiteUsers[code].linkedGrowId;
-        linkedGrowIds.set(code, growId);
-        broadcast({
-          type: 'GTPS_LINK',
-          payload: { growId, code, timestamp: Date.now() },
-        });
-        return res.json({ linked: true, growId, code });
-      }
-    }
-  } catch (err) {}
+  // 2. Kode terdaftar dari akun web -> kirim username-nya ke Lua
+  const reg = registeredLinkCodes.get(code);
+  if (reg) {
+    return res.json({ linked: false, registered: true, username: reg.username, code });
+  }
 
   res.json({ linked: false, code });
 });
@@ -178,47 +147,99 @@ app.get('/api/gtps/balance/:growid', (req, res) => {
   res.json({ success: true, growId: req.params.growid, status: 'active' });
 });
 
-// Periodic sync: Push all website codes to GTPS Server every 3 seconds
-setInterval(async () => {
-  if (registeredLinkCodes.size === 0) return;
-  const userList = [];
-  for (const [code, item] of registeredLinkCodes.entries()) {
-    userList.push({
-      username: item.username,
-      code: item.code,
-      linkedGrowId: linkedGrowIds.get(code) || item.growId || null,
-    });
+// Withdraw dari web -> bridge Lua -> item langsung masuk backpack in-game.
+// Bridge memvalidasi secretKey + saldo ledger di sisi game (anti double-spend).
+app.post('/api/gtps/withdraw-request', async (req, res) => {
+  const { growId, currency = 'DL', amount } = req.body;
+  const cleanGrowId = String(growId || '').trim();
+  const amt = Number(amount) || 0;
+
+  if (!cleanGrowId || amt <= 0 || !Number.isInteger(amt)) {
+    return res.status(400).json({ ok: false, error: 'growId dan amount (bilangan bulat) wajib diisi' });
   }
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 1200);
-    const res = await fetch(`http://127.0.0.1:${gtpsConfig.port}/`, {
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const bridgeRes = await fetch(`${GTPS_BRIDGE_URL}/supreme/withdraw`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ users: userList }),
+      body: JSON.stringify({
+        secretKey: gtpsConfig.secretKey,
+        growId: cleanGrowId,
+        currency: String(currency).toUpperCase(),
+        amount: amt,
+      }),
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
 
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.pendingLinks)) {
-        for (const link of data.pendingLinks) {
-          const lCode = String(link.code).trim();
-          if (lCode && link.growId && !linkedGrowIds.has(lCode)) {
-            linkedGrowIds.set(lCode, link.growId);
-            console.log(`[GTPS Poller] Detected in-game link: ${link.growId} with code ${lCode}`);
-            broadcast({
-              type: 'GTPS_LINK',
-              payload: { growId: link.growId, code: lCode, timestamp: Date.now() },
-            });
-          }
-        }
-      }
+    const data = await bridgeRes.json().catch(() => ({ ok: false, error: 'bridge_invalid_response' }));
+    console.log(`[GTPS Bridge] withdraw ${amt} ${String(currency).toUpperCase()} -> ${cleanGrowId}: ${bridgeRes.status} ${JSON.stringify(data)}`);
+    return res.status(bridgeRes.status).json(data);
+  } catch (err) {
+    console.error('[GTPS Bridge] unreachable:', err.message);
+    return res.status(502).json({ ok: false, error: 'bridge_unreachable' });
+  }
+});
+
+// Player /unlink di game -> lepas link di sisi web juga
+app.post('/api/gtps/unlink', (req, res) => {
+  const { growid, secretKey } = req.body;
+  if (secretKey !== gtpsConfig.secretKey) {
+    return res.status(403).json({ error: 'Invalid secret key' });
+  }
+  const cleanGrowId = String(growid || '').trim();
+  if (!cleanGrowId) return res.status(400).json({ error: 'growid required' });
+
+  for (const [code, gid] of Array.from(linkedGrowIds.entries())) {
+    if (String(gid).toLowerCase() === cleanGrowId.toLowerCase()) {
+      linkedGrowIds.delete(code);
     }
-  } catch (e) {}
-}, 3000);
+  }
+
+  broadcast({ type: 'GTPS_UNLINK', payload: { growId: cleanGrowId, timestamp: Date.now() } });
+  console.log(`[GTPS Unlink] ${cleanGrowId} unlinked from in-game`);
+  res.json({ success: true, growId: cleanGrowId });
+});
+
+// Tombol Unlink di wallet web -> lepas link web + bridge ke Lua
+// Validasi: kode link harus terdaftar (kode di-re-register tiap wallet dibuka),
+// jadi unlink tetap jalan meski cache link di memori hilang setelah restart.
+app.post('/api/gtps/unlink-web', async (req, res) => {
+  const { code, growId } = req.body;
+  const cleanCode = String(code || '').trim();
+  const cleanGrowId = String(growId || '').trim();
+  if (!cleanGrowId || !cleanCode) {
+    return res.status(400).json({ ok: false, error: 'code dan growId wajib' });
+  }
+
+  if (!registeredLinkCodes.has(cleanCode)) {
+    return res.status(403).json({ ok: false, error: 'kode_link_tidak_dikenal' });
+  }
+
+  const linked = linkedGrowIds.get(cleanCode);
+  if (!linked || String(linked).toLowerCase() === cleanGrowId.toLowerCase()) {
+    linkedGrowIds.delete(cleanCode);
+  }
+
+  // Lepaskan juga link di sisi game (bridge Lua)
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    await fetch(`${GTPS_BRIDGE_URL}/supreme/unlink`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ secretKey: gtpsConfig.secretKey, growId: cleanGrowId }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+  } catch {}
+
+  broadcast({ type: 'GTPS_UNLINK', payload: { growId: cleanGrowId, timestamp: Date.now() } });
+  console.log(`[GTPS Unlink] ${cleanGrowId} unlinked from website (code ${cleanCode})`);
+  res.json({ ok: true, growId: cleanGrowId });
+});
 
 // Real-Time WebSocket Server
 const wss = new WebSocketServer({ server, path: '/ws' });

@@ -100,9 +100,10 @@ interface GameContextType {
 
   // Wallet
   deposit: (dlsAmount: number) => void;
-  withdraw: (dlsAmount: number, growId: string, world: string) => { success: boolean; message: string };
+  withdraw: (dlsAmount: number, growId: string, world: string) => Promise<{ success: boolean; message: string }>;
   tip: (dlsAmount: number, targetUser: string, message?: string) => { success: boolean; message: string };
   updateUserGrowId: (growId: string) => void;
+  unlinkGtps: () => Promise<{ success: boolean; message: string }>;
 
   // Gameplay
   canAfford: (dlsAmount: number) => boolean;
@@ -185,6 +186,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     return null;
   });
+
+  // Ref agar handler WebSocket (yang terpasang sekali) selalu membaca user terbaru,
+  // bukan user dari render pertama (stale closure).
+  const currentUserRef = useRef<StoredAccount | null>(currentUser);
+  currentUserRef.current = currentUser;
 
   const [gtpsPort, setGtpsPortState] = useState<number>(() => {
     const saved = localStorage.getItem('supreme_gtps_port');
@@ -307,9 +313,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const balanceDls = currentUser ? currentUser.balanceDls : 0;
 
   const updateCurrentUserBalance = (newBalanceDls: number) => {
-    if (!currentUser) return;
+    const cu = currentUserRef.current;
+    if (!cu) return;
     const rounded = Number(Math.max(0, newBalanceDls).toFixed(2));
-    const updated: StoredAccount = { ...currentUser, balanceDls: rounded };
+    const updated: StoredAccount = { ...cu, balanceDls: rounded };
     setCurrentUser(updated);
     try {
       localStorage.setItem('supreme_active_session', JSON.stringify(updated));
@@ -318,7 +325,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     setAccounts((prev) => {
       const updatedList = prev.map((acc) =>
-        acc.username.toLowerCase() === currentUser.username.toLowerCase()
+        acc.username.toLowerCase() === cu.username.toLowerCase()
           ? { ...acc, balanceDls: rounded }
           : acc
       );
@@ -442,23 +449,63 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const updateUserGrowId = (growId: string) => {
-    if (!currentUser) return;
+    const cu = currentUserRef.current;
+    if (!cu) return;
     const cleanGrow = String(growId || '').trim();
     if (!cleanGrow) return;
-    const updated = { ...currentUser, growId: cleanGrow, isLinked: true };
+    const updated = { ...cu, growId: cleanGrow, isLinked: true };
     setCurrentUser(updated);
     try {
       localStorage.setItem('supreme_active_session', JSON.stringify(updated));
       localStorage.setItem('voidps_active_session', JSON.stringify(updated));
     } catch {}
     setAccounts((prev) => {
-      const next = prev.map((a) => a.username.toLowerCase() === updated.username.toLowerCase() ? updated : a);
+      const next = prev.map((a) => a.username.toLowerCase() === cu.username.toLowerCase() ? updated : a);
       try {
         localStorage.setItem('supreme_registered_accounts', JSON.stringify(next));
       } catch {}
       return next;
     });
     showToast(`Linked with GTPS Character: ${cleanGrow}!`, 'success', 'GTPS Account Connected');
+  };
+
+  // Lepas link GTPS dari web: server + bridge Lua ikut dilepas
+  const unlinkGtps = async (): Promise<{ success: boolean; message: string }> => {
+    const cu = currentUserRef.current;
+    if (!cu) return { success: false, message: 'Please Sign In first.' };
+    if (!cu.growId) return { success: false, message: 'Akun belum ter-link dengan GTPS.' };
+
+    try {
+      const res = await fetch('/api/gtps/unlink-web', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: cu.linkCode, growId: cu.growId }),
+      });
+      const data = await res.json().catch(() => ({ ok: false }));
+      if (!data.ok) {
+        return { success: false, message: 'Gagal unlink. Coba lagi.' };
+      }
+    } catch {
+      return { success: false, message: 'Server casino tidak merespons.' };
+    }
+
+    const updated = { ...cu, growId: undefined };
+    setCurrentUser(updated);
+    try {
+      localStorage.setItem('supreme_active_session', JSON.stringify(updated));
+      localStorage.setItem('voidps_active_session', JSON.stringify(updated));
+    } catch {}
+    setAccounts((prev) => {
+      const next = prev.map((a) =>
+        a.username.toLowerCase() === cu.username.toLowerCase() ? { ...a, growId: undefined } : a
+      );
+      try {
+        localStorage.setItem('supreme_registered_accounts', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+    showToast('Akun GTPS berhasil di-unlink. Saldo casino tetap aman.', 'success', 'GTPS Unlinked');
+    return { success: true, message: 'Akun GTPS berhasil di-unlink.' };
   };
 
   // Sync user verification code to GTPS backend router
@@ -719,27 +766,51 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     showToast(`Successfully deposited ${toActiveAmount(dlsAmount)} ${currencyLabel}!`, 'success', 'Deposit Confirmed');
   };
 
-  const withdraw = (dlsAmount: number, growId: string, world: string) => {
-    if (!currentUser) {
+  // Withdraw nyata: server -> bridge Lua gtps.cloud -> item masuk backpack in-game.
+  // Saldo hanya dipotong jika bridge konfirmasi item benar-benar terkirim.
+  const withdraw = async (dlsAmount: number, growId: string, world: string): Promise<{ success: boolean; message: string }> => {
+    const cu = currentUserRef.current;
+    if (!cu) {
       return { success: false, message: 'Please Sign In to withdraw.' };
     }
-    if (!growId.trim() || !world.trim()) {
-      return { success: false, message: 'Please enter a valid GrowID and World name.' };
+    if (!growId.trim()) {
+      return { success: false, message: 'Please enter a valid GrowID.' };
     }
-    if (dlsAmount <= 0) {
-      return { success: false, message: 'Please enter an amount greater than 0.' };
+    const amt = Math.floor(dlsAmount);
+    if (amt <= 0 || amt !== dlsAmount) {
+      return { success: false, message: 'Withdraw dari web harus kelipatan 1 DL.' };
     }
     if (balanceDls < dlsAmount) {
       return { success: false, message: 'Insufficient balance for this withdrawal.' };
     }
 
+    try {
+      const res = await fetch('/api/gtps/withdraw-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ growId: growId.trim(), currency: 'DL', amount: amt }),
+      });
+      const data = await res.json().catch(() => ({ ok: false, error: 'invalid_response' }));
+      if (!data.ok) {
+        const msgs: Record<string, string> = {
+          player_offline: 'GrowID kamu tidak online di GTPS. Login ke game dulu, lalu coba lagi.',
+          growid_belum_link: 'GrowID belum ter-link. Ketik /link <kode> di dalam game dulu.',
+          saldo_ledger_tidak_cukup: 'Saldo deposit in-game tidak mencukupi. /deposit dulu di game.',
+          backpack_penuh: 'Backpack di game penuh. Kosongkan slot dulu.',
+          invalid_secret_key: 'Konfigurasi secretKey server salah. Hubungi admin.',
+          bridge_unreachable: 'Server GTPS tidak bisa dihubungi. Coba lagi nanti.',
+        };
+        const msg = msgs[data.error] || `Withdraw gagal: ${data.error || res.status}`;
+        return { success: false, message: msg };
+      }
+    } catch {
+      return { success: false, message: 'Server casino tidak merespons. Coba lagi.' };
+    }
+
     updateCurrentUserBalance(balanceDls - dlsAmount);
-    const msg = `Withdrawal of ${toActiveAmount(dlsAmount)} ${currencyLabel} sent! Bot will deliver to world "${world}" for ${growId}.`;
-    showToast(msg, 'success', 'Withdrawal Queued');
-    return {
-      success: true,
-      message: msg,
-    };
+    const msg = `Withdraw berhasil! ${amt} DL dikirim ke backpack ${growId.trim()} in-game.`;
+    showToast(msg, 'success', 'Withdraw Delivered');
+    return { success: true, message: msg };
   };
 
   const tip = (dlsAmount: number, targetUser: string, message?: string) => {
@@ -862,8 +933,46 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
               });
             } else if (data.type === 'GTPS_LINK' && data.payload) {
               const { growId, code } = data.payload;
-              if (growId) {
+              const cu = currentUserRef.current;
+              // Hanya berlaku untuk akun yang kode link-nya cocok
+              // (broadcast server dikirim ke SEMUA client)
+              if (growId && cu && String(code || '') === String(cu.linkCode || '')) {
                 updateUserGrowId(growId);
+              }
+            } else if (data.type === 'GTPS_UNLINK' && data.payload) {
+              const cu = currentUserRef.current;
+              const myGrow = String(cu?.growId || '').toLowerCase();
+              if (cu && myGrow && String(data.payload.growId || '').toLowerCase() === myGrow) {
+                const updated = { ...cu, growId: undefined };
+                setCurrentUser(updated);
+                try {
+                  localStorage.setItem('supreme_active_session', JSON.stringify(updated));
+                  localStorage.setItem('voidps_active_session', JSON.stringify(updated));
+                } catch {}
+                setAccounts((prev) => {
+                  const next = prev.map((a) =>
+                    a.username.toLowerCase() === cu.username.toLowerCase() ? { ...a, growId: undefined } : a
+                  );
+                  try {
+                    localStorage.setItem('supreme_registered_accounts', JSON.stringify(next));
+                  } catch {}
+                  return next;
+                });
+                showToast('Link GTPS diputus dari sisi game.', 'info', 'GTPS Unlinked');
+              }
+            } else if (data.type === 'GTPS_DEPOSIT' && data.payload) {
+              // Deposit in-game -> saldo web bertambah otomatis (real, bukan simulasi)
+              const p = data.payload;
+              const cu = currentUserRef.current;
+              const myGrow = String(cu?.growId || '').toLowerCase();
+              if (cu && myGrow && String(p.growId || '').toLowerCase() === myGrow) {
+                const cur = String(p.currency || 'DL').toUpperCase();
+                const dls = cur === 'BGL' ? Number(p.amount) * 100 : cur === 'WL' ? Number(p.amount) / 100 : Number(p.amount);
+                if (dls > 0) {
+                  updateCurrentUserBalance(cu.balanceDls + dls);
+                  triggerBalanceGain(dls);
+                  showToast(`Deposit in-game diterima: +${dls} DLS!`, 'success', 'GTPS Deposit');
+                }
               }
             }
           } catch {}
@@ -914,24 +1023,12 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {}
   };
 
-  // Case Battles Auto-Recovery on Reload (Guarantees user won't lose winnings on refresh/disconnect)
+  // ANTI-DUPE: file "pending battle" dari localStorage TIDAK PERNAH dipakai
+  // membayar ulang - dulu bisa dipalsukan (precomputedWinnerIsUser + lootTotal)
+  // untuk saldo gratis setiap reload. Sekarang cuma dibuang.
   useEffect(() => {
     try {
-      const pendingStr = localStorage.getItem('supreme_active_battle_pending');
-      if (pendingStr) {
-        const battle = JSON.parse(pendingStr);
-        if (battle && battle.precomputedWinnerId && !battle.payoutAwarded) {
-          if (battle.precomputedWinnerIsUser) {
-            const wonAmount = Number(battle.precomputedLootTotal || 0);
-            if (wonAmount > 0) {
-              awardPayout(wonAmount, 'Restored Case Battle Victory', 1, 0);
-              showToast(`🏆 Restored Case Battle Victory: Awarded ${wonAmount} DLS from your battle!`, 'success', 'Battle Restored');
-            }
-          }
-          battle.payoutAwarded = true;
-          localStorage.setItem('supreme_active_battle_pending', JSON.stringify(battle));
-        }
-      }
+      localStorage.removeItem('supreme_active_battle_pending');
     } catch {}
   }, []);
 
@@ -1120,6 +1217,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         withdraw,
         tip,
         updateUserGrowId,
+        unlinkGtps,
         canAfford,
         deductBet,
         awardPayout,

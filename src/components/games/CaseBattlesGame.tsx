@@ -205,26 +205,10 @@ export const CaseBattlesGame: React.FC<{ onBack: () => void }> = ({ onBack }) =>
   const precomputedRoundsRef = useRef<{ [roundIdx: number]: { [playerIdx: number]: CaseItemDrop } }>({});
   const precomputedWinnerRef = useRef<{ winner: BattlePlayer; totalLootWon: number } | null>(null);
 
-  // Auto-recovery on mount if interrupted
-  useEffect(() => {
-    try {
-      const pendingStr = localStorage.getItem('supreme_active_battle_pending');
-      if (pendingStr) {
-        const battle = JSON.parse(pendingStr);
-        if (battle && battle.precomputedWinnerId && !battle.payoutAwarded) {
-          if (battle.precomputedWinnerIsUser) {
-            const wonAmount = Number(battle.precomputedLootTotal || 0);
-            if (wonAmount > 0) {
-              awardPayout(wonAmount, 'Restored Case Battle Victory', 1, 0);
-              showToast(`🏆 Restored Case Battle Victory: Awarded ${wonAmount} DLS from your battle!`, 'success', 'Battle Restored');
-            }
-          }
-          battle.payoutAwarded = true;
-          localStorage.setItem('supreme_active_battle_pending', JSON.stringify(battle));
-        }
-      }
-    } catch {}
-  }, []);
+  // ANTI-DUPE: tidak ada lagi payout otomatis dari localStorage -
+  // dulu file supreme_active_battle_pending bisa dipalsukan untuk
+  // saldo gratis setiap reload. Kemenangan hanya dibayar saat ronde
+  // selesai secara live (finishBattle).
 
   // Create Battle Form State (Matches media_1789565632571.png)
   const [createMode, setCreateMode] = useState<BattleMode>('normal');

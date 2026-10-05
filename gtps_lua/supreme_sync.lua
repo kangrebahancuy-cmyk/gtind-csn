@@ -75,6 +75,11 @@ end
 
 loadStore()
 
+local function removeLink(growid)
+    links[normUser(growid)] = nil
+    saveStore()
+end
+
 local function getBalance(username)
     return accounts[normUser(username)] or 0
 end
@@ -170,8 +175,17 @@ local function webhookLink(growid, code, username)
     asyncPost(WEB_API_URL .. "/gtps/link-growid", payload)
 end
 
+local function webhookUnlink(growid)
+    local payload = string.format(
+        '{"growid":"%s","secretKey":"%s"}',
+        jsonEscape(growid), jsonEscape(SECRET_KEY)
+    )
+    asyncPost(WEB_API_URL .. "/gtps/unlink", payload)
+end
+
 -- ============================================================
 -- PROSES KODE LINK (dipanggil saat player /link atau isi dialog)
+-- Selalu memberi feedback ke player - tidak pernah diam.
 -- ============================================================
 local function checkAndApplyCode(player, code)
     local growid = player:getName()
@@ -181,10 +195,28 @@ local function checkAndApplyCode(player, code)
         return
     end
 
-    asyncGet(WEB_API_URL .. "/gtps/check-link?code=" .. cleanCode, function(body)
+    if not http then
+        player:onConsoleMessage("`4[SUPREME] http API tidak tersedia di server ini!``")
+        return
+    end
+
+    player:onConsoleMessage("`9[SUPREME] Memeriksa kode `6" .. cleanCode .. "`9 ke website casino...``")
+
+    coroutine.wrap(function()
+        local url = WEB_API_URL .. "/gtps/check-link?code=" .. cleanCode
+        local body, status = http:get(url, JSON_HEADERS)
+
+        if status ~= 200 or not body then
+            print("[SUPREME] check-link GAGAL status=" .. tostring(status) .. " body=" .. tostring(body))
+            print("[SUPREME] URL yang dipakai: " .. url)
+            player:onConsoleMessage("`4[SUPREME] Gagal menghubungi website casino (status " .. tostring(status) .. ").``")
+            player:onConsoleMessage("`4[SUPREME] Kemungkinan: WEB_API_URL di script belum diganti / website sedang offline.``")
+            return
+        end
+
         -- Contoh respons server.js:
-        --   {"linked":true,"growId":"xxx","code":"123456","username":"budi"}
-        --   {"linked":false,"code":"123456"}
+        --   {"linked":false,"registered":true,"username":"budi","code":"123456"}
+        --   {"linked":true,"growId":"xxx","code":"123456"}
         -- Username web dipakai kalau ada; kalau belum, fallback = kode.
         local username = jsonStrField(body, "username")
         if not username or username == "" then
@@ -202,7 +234,7 @@ local function checkAndApplyCode(player, code)
 
         player:onConsoleMessage("`2[SUPREME] Berhasil! GrowID `6" .. growid .. "`2 terhubung ke akun casino `6" .. username .. "`2!``")
         player:onConsoleMessage("`2[SUPREME] Ketik `6/balance`2 cek saldo, `6/deposit 10 dl`2 deposit, `6/withdraw 5 dl`2 withdraw!``")
-    end)
+    end)()
 end
 
 -- ============================================================
@@ -288,7 +320,7 @@ local function handleCommand(player, cmd, arg)
     end
 
     -- /link [kode]
-    if cmd == "link" or cmd == "setgrowid" then
+    if cmd == "link" then
         if arg == "" then
             showLinkDialog(player)
         else
@@ -297,8 +329,22 @@ local function handleCommand(player, cmd, arg)
         return true
     end
 
-    -- /balance | /bal
-    if cmd == "balance" or cmd == "bal" then
+    -- /unlink : lepas link akun casino dari GrowID ini (saldo akun tetap aman)
+    if cmd == "unlink" then
+        local linkedUser = getLinkedUsername(growid)
+        if not linkedUser then
+            player:onConsoleMessage("`4[SUPREME] Kamu belum link akun apapun.``")
+            return true
+        end
+        removeLink(growid)
+        webhookUnlink(growid)
+        player:onConsoleMessage("`2[SUPREME] Link akun `6" .. linkedUser .. "`2 dilepas dari GrowID `6" .. growid .. "`2.``")
+        player:onConsoleMessage("`9[SUPREME] Saldo akun casino tetap tersimpan. Ketik `6/link <kode>`9 untuk link lagi.``")
+        return true
+    end
+
+    -- /balance
+    if cmd == "balance" then
         local linkedUser = getLinkedUsername(growid)
         if not linkedUser then
             player:onConsoleMessage("`4[SUPREME] Kamu belum link akun! Ketik `6/link <kode>`4 dulu.``")
@@ -313,7 +359,7 @@ local function handleCommand(player, cmd, arg)
     end
 
     -- /deposit <amount> [wl|dl|bgl]
-    if cmd == "deposit" or cmd == "dep" then
+    if cmd == "deposit" then
         local amtStr, curStr = arg:match("^(%d+)%s*(%a*)$")
         local amt = tonumber(amtStr) or 0
         curStr = string.lower(curStr or "")
@@ -363,7 +409,7 @@ local function handleCommand(player, cmd, arg)
     end
 
     -- /withdraw <amount> [wl|dl|bgl]
-    if cmd == "withdraw" or cmd == "wd" or cmd == "with" then
+    if cmd == "withdraw" then
         local amtStr, curStr = arg:match("^(%d+)%s*(%a*)$")
         local amt = tonumber(amtStr) or 0
         curStr = string.lower(curStr or "")
@@ -488,13 +534,10 @@ if type(registerLuaCommand) == "function" then
     reg("supreme",    "Buka panel Supreme Casino")
     reg("casinohelp", "Bantuan perintah Supreme Casino")
     reg("deposit",    "Deposit ke casino: /deposit <jml> [wl|dl|bgl]")
-    reg("dep",        "Alias /deposit")
     reg("withdraw",   "Withdraw dari casino: /withdraw <jml> [wl|dl|bgl]")
-    reg("wd",         "Alias /withdraw")
-    reg("with",       "Alias /withdraw")
     reg("link",       "Link akun web casino: /link <kode 6 digit>")
+    reg("unlink",     "Lepas link akun casino dari GrowID ini")
     reg("balance",    "Cek saldo casino")
-    reg("bal",        "Alias /balance")
 else
     print("[SUPREME] registerLuaCommand tidak tersedia - command tetap jalan via callback")
 end
@@ -594,6 +637,29 @@ if type(onHTTPRequest) == "function" then
 
             return jsonResponse(200, '{"ok":true,"delivered":' .. amount ..
                 ',"currency":"' .. currency .. '","growId":"' .. jsonEscape(growId) .. '"}')
+        end
+
+        -- Unlink dari website: POST /supreme/unlink
+        -- Body: {"secretKey":"...","growId":"budi"}
+        if method == "post" and path == "/supreme/unlink" then
+            local body = tostring(req.body or "")
+
+            if jsonStrField(body, "secretKey") ~= SECRET_KEY then
+                return jsonResponse(403, '{"ok":false,"error":"invalid_secret_key"}')
+            end
+
+            local growId = jsonStrField(body, "growId") or ""
+            if growId == "" then
+                return jsonResponse(400, '{"ok":false,"error":"growId_wajib"}')
+            end
+
+            local linkedUser = getLinkedUsername(growId)
+            if not linkedUser then
+                return jsonResponse(200, '{"ok":true,"unlinked":false,"note":"memang_belum_link"}')
+            end
+
+            removeLink(growId)
+            return jsonResponse(200, '{"ok":true,"unlinked":true}')
         end
 
         return jsonResponse(404, '{"ok":false,"error":"not_found"}')

@@ -30,18 +30,15 @@ export const WalletModal: React.FC = () => {
     fromActiveAmount,
     currencyLabel,
     currencyIcon,
-    deposit,
     withdraw,
     tip,
     gtpsPort,
     updateUserGrowId,
+    unlinkGtps,
   } = useGame();
 
   const [copiedField, setCopiedField] = useState<string | null>(null);
-
-  // Deposit state
-  const [depositAmount, setDepositAmount] = useState<string>('50');
-  const [depositSuccessMsg, setDepositSuccessMsg] = useState<string | null>(null);
+  const [confirmUnlink, setConfirmUnlink] = useState(false);
 
   // Withdraw state
   const [withdrawAmount, setWithdrawAmount] = useState<string>('10');
@@ -103,26 +100,18 @@ export const WalletModal: React.FC = () => {
     setTimeout(() => setCopiedField(null), 2000);
   };
 
-  const handleSimulateDeposit = () => {
-    const val = parseFloat(depositAmount);
-    if (isNaN(val) || val <= 0) return;
-    const dlsVal = fromActiveAmount(val);
-    deposit(dlsVal);
-    setDepositSuccessMsg(`Successfully credited ${val} ${currencyLabel} (${dlsVal} DLS) to your account!`);
-    setTimeout(() => setDepositSuccessMsg(null), 5000);
-  };
-
-  const handleWithdraw = () => {
+  const handleWithdraw = async () => {
     const val = parseFloat(withdrawAmount);
     if (isNaN(val) || val <= 0) {
       setWithdrawMsg({ type: 'error', text: 'Enter a valid amount.' });
       return;
     }
     const dlsVal = fromActiveAmount(val);
-    const res = withdraw(dlsVal, withdrawGrowId, withdrawWorld);
+    setWithdrawMsg(null);
+    const res = await withdraw(dlsVal, withdrawGrowId, withdrawWorld);
     if (res.success) {
       setWithdrawMsg({ type: 'success', text: res.message });
-      setTimeout(() => setWithdrawMsg(null), 6000);
+      setTimeout(() => setWithdrawMsg(null), 8000);
     } else {
       setWithdrawMsg({ type: 'error', text: res.message });
     }
@@ -275,85 +264,17 @@ export const WalletModal: React.FC = () => {
                 </div>
               </div>
 
-              {/* Instant Web Cashier Deposit */}
-              <div className="bg-[#101725] border border-[#1d2a3f] rounded-2xl p-4 flex flex-col gap-3">
+              {/* Anti-dupe: deposit HANYA via perintah in-game. Item benar-benar
+                  dipotong dari inventory oleh Lua, lalu saldo web bertambah otomatis
+                  lewat event GTPS_DEPOSIT. Tidak ada lagi tombol tambah saldo gratis. */}
+              <div className="bg-[#101725] border border-[#1d2a3f] rounded-2xl p-4 flex flex-col gap-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-200">Confirm Deposit Amount</span>
-                  <span className="text-[10px] text-slate-400 font-mono">100 DLS = 1 BGL</span>
+                  <span className="text-xs font-bold text-slate-200">Saldo web hanya dari deposit in-game</span>
+                  <span className="text-[10px] text-emerald-400 font-mono font-bold">Anti-Dupe</span>
                 </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[11px] font-semibold text-slate-400">Amount ({currencyLabel}):</label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      step={activeCurrency === 'BGLS' ? '0.01' : '1'}
-                      min="1"
-                      value={depositAmount}
-                      onChange={(e) => setDepositAmount(e.target.value)}
-                      className="w-full bg-[#090e18] border border-[#1f2c42] rounded-xl px-3 py-2.5 text-sm text-white font-mono focus:outline-none focus:border-[#0074e4] transition"
-                    />
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
-                      <img src={currencyIcon} alt={currencyLabel} className="w-4 h-4 object-contain" />
-                      <span className="text-xs font-bold text-slate-300">{currencyLabel}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Quick amount presets */}
-                <div className="grid grid-cols-4 gap-1.5 text-xs font-bold">
-                  <button
-                    onClick={() => {
-                      sound.playClick();
-                      setDepositAmount(activeCurrency === 'BGLS' ? '0.5' : '50');
-                    }}
-                    className="py-1.5 rounded-lg bg-[#141d2c] hover:bg-[#1a263a] text-slate-300 transition cursor-pointer"
-                  >
-                    +{activeCurrency === 'BGLS' ? '0.5' : '50'}
-                  </button>
-                  <button
-                    onClick={() => {
-                      sound.playClick();
-                      setDepositAmount(activeCurrency === 'BGLS' ? '1.0' : '100');
-                    }}
-                    className="py-1.5 rounded-lg bg-[#141d2c] hover:bg-[#1a263a] text-slate-300 transition cursor-pointer"
-                  >
-                    +{activeCurrency === 'BGLS' ? '1 BGL' : '100 DL'}
-                  </button>
-                  <button
-                    onClick={() => {
-                      sound.playClick();
-                      setDepositAmount(activeCurrency === 'BGLS' ? '5.0' : '500');
-                    }}
-                    className="py-1.5 rounded-lg bg-[#141d2c] hover:bg-[#1a263a] text-amber-300 transition cursor-pointer"
-                  >
-                    +{activeCurrency === 'BGLS' ? '5 BGL' : '500 DL'}
-                  </button>
-                  <button
-                    onClick={() => {
-                      sound.playClick();
-                      setDepositAmount(activeCurrency === 'BGLS' ? '10.0' : '1000');
-                    }}
-                    className="py-1.5 rounded-lg bg-[#141d2c] hover:bg-[#1a263a] text-cyan-300 transition cursor-pointer"
-                  >
-                    +{activeCurrency === 'BGLS' ? '10 BGL' : '1000 DL'}
-                  </button>
-                </div>
-
-                {depositSuccessMsg && (
-                  <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-medium flex items-center gap-2">
-                    <Check className="w-4 h-4 shrink-0" />
-                    <span>{depositSuccessMsg}</span>
-                  </div>
-                )}
-
-                <button
-                  onClick={handleSimulateDeposit}
-                  className="w-full py-3 rounded-xl bg-[#0074e4] hover:bg-[#0082fe] active:bg-[#0066cb] text-white font-extrabold text-xs shadow-lg shadow-[#0074e4]/30 transition flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <span>Confirm Deposit</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Jalankan perintah di atas di dalam game. Item dipotong langsung dari inventory kamu oleh sistem, dan saldo di website bertambah otomatis beberapa detik kemudian. Tidak ada deposit manual dari web.
+                </p>
               </div>
             </div>
           )}
@@ -531,6 +452,36 @@ export const WalletModal: React.FC = () => {
                     </span>
                   )}
                 </div>
+
+                {user.growId && (
+                  confirmUnlink ? (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={async () => {
+                          await unlinkGtps();
+                          setConfirmUnlink(false);
+                        }}
+                        className="flex-1 py-2.5 rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 text-xs font-bold transition cursor-pointer"
+                      >
+                        Ya, Lepas Link
+                      </button>
+                      <button
+                        onClick={() => setConfirmUnlink(false)}
+                        className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition cursor-pointer"
+                      >
+                        Batal
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setConfirmUnlink(true)}
+                      className="w-full py-2.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-300 text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>Unlink Account ({user.growId})</span>
+                    </button>
+                  )
+                )}
               </div>
             </div>
           )}
