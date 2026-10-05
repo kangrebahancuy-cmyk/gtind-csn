@@ -76,7 +76,7 @@ async function mongoClaimLease(name, owner, ttlMs){
   return r?.owner===owner;
 }
 
-export function installGameRoutes(app, economy, options = {}) {
+export async function installGameRoutes(app, economy, options = {}) {
   const broadcast = typeof options.broadcast === 'function' ? options.broadcast : () => {};
   const instanceId = crypto.randomUUID();
   const persistCrash = () => {
@@ -91,12 +91,18 @@ export function installGameRoutes(app, economy, options = {}) {
       for(const p of crashGlobal.players.values()) await players.replaceOne({roundId:p.roundId,userId:p.userId},{...p,roundId:p.roundId,updatedAt:Date.now()},{upsert:true});
     }catch{} })();
   };
-  const loadCrash = () => {
-    ensure();
+  const loadCrash = async () => {
     try {
-      const saved=JSON.parse(fs.readFileSync(CRASH_FILE,'utf8'));
-      if(!saved?.roundId)return false;
-      Object.assign(crashGlobal,saved); crashGlobal.players=new Map((saved.players||[]).map(p=>[p.userId,p]));
+      const db=await getMongoDb();
+      const saved=await db.collection('crashRounds').findOne({}, {sort:{updatedAt:-1}});
+      if(!saved?.id)return false;
+      Object.assign(crashGlobal,{
+        roundId:saved.id,phase:saved.phase,countdown:saved.countdown,multiplier:saved.multiplier,
+        crashPoint:saved.crashPoint,serverSeed:saved.serverSeed,serverSeedHash:saved.serverSeedHash,
+        startedAt:saved.startedAt,bettingStartedAt:saved.bettingStartedAt,history:saved.history||[],nextRoundAt:saved.nextRoundAt||0
+      });
+      const players=await db.collection('crashPlayers').find({roundId:crashGlobal.roundId}).toArray();
+      crashGlobal.players=new Map(players.map(({_id,...p})=>[p.userId,p]));
       return true;
     } catch { return false; }
   };
@@ -136,7 +142,9 @@ export function installGameRoutes(app, economy, options = {}) {
   };
   const timer=setInterval(()=>{void crashTick();},100);
   if(typeof timer.unref==='function')timer.unref();
-  if(!loadCrash()) startCrashRound();
+  if(!(await loadCrash())) {
+    if(await mongoClaimLease('crash-global-leader',instanceId,1500)) startCrashRound();
+  }
   if(crashGlobal.phase==='crashed' && crashGlobal.nextRoundAt<=Date.now()) startCrashRound();
   function generateCrashPoint(seed){ return crashPointFromSeed(seed); }
   if(crashGlobal.phase==='flying' && Date.now()-crashGlobal.startedAt>0){
