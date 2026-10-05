@@ -37,15 +37,16 @@ Important:
 - Roulette validates the submitted stake against the amount debited in DLS.
 - Crash settlement uses server-side elapsed time and crash point.
 - True player-vs-player Case Battle matchmaking is intentionally disabled; the real-money path is server-vs-house.
-- File-backed JSON persistence still requires migration to transactional persistent storage before high-value production.
+- Economy persistence now uses a file-backed SQLite store (`data/economy.sqlite`) with WAL, FULL synchronous durability, and optimistic version checks. The previous `data/economy.json` is imported automatically on first startup when present.
 
 ## Validation
 - Added GitHub Actions CI for Vite build and Node syntax checks.
 - Game payout settlement is idempotent by round ID in the economy ledger.
+- Economy writes use SQLite transactions and optimistic version checks to reject stale concurrent writes.
 - Regression tests cover deterministic RNG, Blackjack deck/scoring, Mines, Roulette, Keno, and Crash.
 
 ## Production requirement
-Phase 2 game authority is complete at the application-logic level, but production/high-value wagering must wait for transactional persistent storage, concurrency control, and a true shared Crash/PvP matchmaking service.
+Phase 2 game authority now has transactional local persistence and concurrency conflict detection for the economy. High-value production still requires a deployment with durable shared storage (not ephemeral/serverless disk) and the true shared Crash/PvP services described below.
 
 ## Four-game authority hardening
 
