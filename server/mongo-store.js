@@ -128,30 +128,23 @@ function compare(value, op, expected) {
 function matches(doc, filter = {}) {
   if (!filter || Object.keys(filter).length === 0) return true;
   for (const [key, expected] of Object.entries(filter)) {
-    if (key === '$or') {
-      if (!Array.isArray(expected) || !expected.some(f => matches(doc, f))) return false;
-      continue;
-    }
-    if (key === '$and') {
-      if (!Array.isArray(expected) || !expected.every(f => matches(doc, f))) return false;
-      continue;
-    }
+    if (key === '$or') { if (!Array.isArray(expected) || !expected.some(f => matches(doc, f))) return false; continue; }
+    if (key === '$and') { if (!Array.isArray(expected) || !expected.every(f => matches(doc, f))) return false; continue; }
     const value = getPath(doc, key);
-    if (expected && typeof expected === 'object' && !Array.isArray(expected) && !(expected instanceof Date) && !(expected instanceof RegExp)) {
-      if (Object.prototype.hasOwnProperty.call(expected, '$options')) continue;
+    if (expected instanceof RegExp) { if (!expected.test(String(value ?? ''))) return false; continue; }
+    if (expected && typeof expected === 'object' && !Array.isArray(expected) && !(expected instanceof Date)) {
+      const operatorKeys = Object.keys(expected).filter(k => k[0] === '$');
+      if (operatorKeys.length === 0) { if (!equal(value, expected)) return false; continue; }
       for (const [op, wanted] of Object.entries(expected)) {
         if (op === '$options') continue;
         if (op === '$regex') {
-          const flags = String(expected.$options || '');
-          const re = new RegExp(String(wanted), flags);
+          const re = new RegExp(String(wanted), String(expected.$options || ''));
           if (!re.test(String(value ?? ''))) return false;
         } else if (!compare(value, op, wanted)) return false;
       }
-    } else if (expected instanceof RegExp) {
-      if (!expected.test(String(value ?? ''))) return false;
-    } else if (!equal(value, expected)) {
-      return false;
+      continue;
     }
+    if (!equal(value, expected)) return false;
   }
   return true;
 }
@@ -366,7 +359,11 @@ const db = new DatabaseAdapter();
 export function isSqliteConfigured() { return true; }
 export async function getMongoClient() { return { close: async () => {} }; }
 export async function getMongoDb() { return db; }
-export async function pingMongo() { return true; }
+export async function pingMongo() {
+  const row = sqlite.prepare('SELECT 1 AS ok').get();
+  if (!row || row.ok !== 1) throw new Error('sqlite_unhealthy');
+  return true;
+}
 
 export async function ensureMongoSchema() {
   for (const name of Object.keys(UNIQUE_FIELDS)) ensureTable(name);

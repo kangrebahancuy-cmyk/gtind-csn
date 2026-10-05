@@ -2,21 +2,24 @@ import crypto from 'crypto';
 import { getMongoDb, withMongoTransaction } from './mongo-store.js';
 import { recordGameActivity, recordGameOutcome } from './progression.js';
 const rateBuckets = new Map();
+const MAX_USERNAME_LENGTH = 24;
+const MAX_GROWID_LENGTH = 24;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_BODY_AMOUNT = 100000000;
 function constantTimeEqual(a,b) { const aa=Buffer.from(String(a)); const bb=Buffer.from(String(b)); return aa.length===bb.length && crypto.timingSafeEqual(aa,bb); }
 async function rateLimit(key, limit=30, windowMs=60000) {
   const nowMs=Date.now();
-  const db=await getMongoDb();
-  const c=db.collection('rateLimits');
-  const current=await c.findOne({key});
-  if(!current || current.expiresAt.getTime()<=nowMs){
-    await c.updateOne({key},{$set:{key,count:1,windowMs,expiresAt:new Date(nowMs+windowMs),updatedAt:new Date()}},{upsert:true});
-    return true;
-  }
-  if(current.count>=limit)return false;
-  const updated=await c.findOneAndUpdate({key,count:current.count},{$inc:{count:1},$set:{updatedAt:new Date()}},{returnDocument:'after'});
-  return Boolean(updated && updated.count<=limit);
+  return withMongoTransaction(async (_session, db) => {
+    const c=db.collection('rateLimits');
+    const current=await c.findOne({key});
+    if(!current || current.expiresAt.getTime()<=nowMs){
+      await c.updateOne({key},{$set:{key,count:1,windowMs,expiresAt:new Date(nowMs+windowMs),updatedAt:new Date()}},{upsert:true});
+      return true;
+    }
+    if(current.count>=limit)return false;
+    const updated=await c.findOneAndUpdate({key,count:current.count},{$inc:{count:1},$set:{updatedAt:new Date()}},{returnDocument:'after'});
+    return Boolean(updated && updated.count<=limit);
+  });
 }
 function clientIp(req) { return String(req.headers['x-forwarded-for']||req.socket?.remoteAddress||'unknown').split(',')[0].trim(); }
 function audit(db, actor, action, metadata={}) { db.auditLogs ||= []; db.auditLogs.push({id:id('audit'),actorUserId:actor?.id||null,actorUsername:actor?.username||null,action,metadata,createdAt:now()}); if(db.auditLogs.length>10000) db.auditLogs=db.auditLogs.slice(-10000); }
@@ -235,7 +238,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     const password = String(req.body?.password || '');
     const growId = String(req.body?.growId || '').trim();
     if (!(await rateLimit(`register:${clientIp(req)}`,5,3600000))) return res.status(429).json({ok:false,error:'rate_limited'});
-    if (username.length < 4 || username.length > 24) return res.status(400).json({ ok:false, error:'invalid_username' });
+    if (username.length < 4 || username.length > MAX_USERNAME_LENGTH) return res.status(400).json({ ok:false, error:'invalid_username' });
     if (password.length < 8 || password.length > 128) return res.status(400).json({ ok:false, error:'invalid_password' });
     const db = await load();
     if (findUser(db, username)) return res.status(409).json({ ok:false, error:'username_taken' });
@@ -325,7 +328,9 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
   });
 
   app.get('/api/gtps/check-link', async (req,res) => {
+    if (!(await rateLimit(`gtps-check-link:${clientIp(req)}`,10,60000))) return res.status(429).json({ok:false,error:'rate_limited'});
     const code=String(req.query.code||'').trim();
+    if (!/^\d{6}$/.test(code)) return res.status(400).json({ok:false,error:'invalid_link_code'});
     const db=await load(); const user=db.users.find(u=>u.linkCode===code);
     if(!user) return res.json({linked:false,code});
     res.json({linked:Boolean(user.gtpsLinked&&user.growId),growId:user.growId||null,registered:true,username:user.username,code});
@@ -336,7 +341,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     if(!constantTimeEqual(secret,getGtpsSecret())) return res.status(403).json({ok:false,error:'invalid_secret_key'});
     if(!(await rateLimit(`gtps-link:${clientIp(req)}`,30,60000))) return res.status(429).json({ok:false,error:'rate_limited'});
     const code=String(req.body?.code||'').trim(); const growId=String(req.body?.growid||'').trim();
-    if(!code || !growId) return res.status(400).json({ok:false,error:'invalid_link'});
+    if(!code || !growId || growId.length>MAX_GROWID_LENGTH) return res.status(400).json({ok:false,error:'invalid_link'});
     const db=await load(); const user=db.users.find(u=>u.linkCode===code);
     if(!user) return res.status(404).json({ok:false,error:'invalid_link_code'});
     const collision=db.users.find(u=>u.id!==user.id && String(u.growId||'').toLowerCase()===growId.toLowerCase());
@@ -346,7 +351,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
   });
 
   app.post('/api/gtps/unlink', async (req,res) => {
-    const secret=String(req.body?.secretKey||req.headers['x-gtps-secret']||'');
+    const secret=String(req.headers['x-gtps-secret']||'');
     if(!secret || secret!==getGtpsSecret()) return res.status(403).json({ok:false,error:'invalid_secret_key'});
     const result=unlinkGrowId(req.body?.growid);
     res.json({ok:true,success:true,growId:req.body?.growid,found:Boolean(result)});
