@@ -859,84 +859,91 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let reconnectTimeout: any = null;
 
     const connect = () => {
-      try {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws`;
         ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onmessage = async (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            if (data.type === 'INIT_STATE') {
-              if (data.payload?.chatHistory && data.payload.chatHistory.length > 0) {
-                setChatMessages(data.payload.chatHistory);
-              }
-              if (data.payload?.liveBets && data.payload.liveBets.length > 0) {
-                setLiveBets(data.payload.liveBets);
-              }
-            } else if (data.type === 'CHAT_MESSAGE' && data.payload) {
-              setChatMessages((prev) => {
-                if (prev.some((m) => m.id === data.payload.id)) return prev;
-                const updated = [...prev.slice(-99), data.payload];
-                try { localStorage.setItem('supreme_chat_messages', JSON.stringify(updated)); } catch {}
-                return updated;
+          let data: any;
+          try { data = JSON.parse(event.data); } catch { return; }
+
+          if (data.type === 'INIT_STATE') {
+            if (data.payload?.chatHistory?.length) setChatMessages(data.payload.chatHistory);
+            if (data.payload?.liveBets?.length) setLiveBets(data.payload.liveBets);
+            return;
+          }
+
+          if (data.type === 'CHAT_MESSAGE' && data.payload) {
+            setChatMessages((prev) => {
+              if (prev.some((m) => m.id === data.payload.id)) return prev;
+              const updated = [...prev.slice(-99), data.payload];
+              try { localStorage.setItem('supreme_chat_messages', JSON.stringify(updated)); } catch {}
+              return updated;
+            });
+            return;
+          }
+
+          if (data.type === 'LIVE_BET' && data.payload) {
+            setLiveBets((prev) => {
+              if (prev.some((bet) => bet.id === data.payload.id)) return prev;
+              const updated = [data.payload, ...prev.slice(0, 39)];
+              try { localStorage.setItem('supreme_live_bets', JSON.stringify(updated)); } catch {}
+              return updated;
+            });
+            return;
+          }
+
+          if (data.type === 'GTPS_LINK' && data.payload) {
+            const cu = currentUserRef.current;
+            if (data.payload.growId && cu && String(data.payload.code || '') === String(cu.linkCode || '')) {
+              updateUserGrowId(data.payload.growId);
+            }
+            return;
+          }
+
+          if (data.type === 'GTPS_UNLINK' && data.payload) {
+            const cu = currentUserRef.current;
+            const myGrow = String(cu?.growId || '').toLowerCase();
+            if (cu && myGrow && String(data.payload.growId || '').toLowerCase() === myGrow) {
+              const updated = { ...cu, growId: undefined, gtpsLinked: false };
+              setCurrentUser(updated);
+              try {
+                localStorage.setItem('supreme_active_session', JSON.stringify(updated));
+                localStorage.setItem('voidps_active_session', JSON.stringify(updated));
+              } catch {}
+              setAccounts((prev) => {
+                const next = prev.map((account) =>
+                  account.username.toLowerCase() === cu.username.toLowerCase() ? { ...account, growId: undefined } : account
+                );
+                try { localStorage.setItem('supreme_registered_accounts', JSON.stringify(next)); } catch {}
+                return next;
               });
-            } else if (data.type === 'LIVE_BET' && data.payload) {
-              setLiveBets((prev) => {
-                if (prev.some((b) => b.id === data.payload.id)) return prev;
-                const updated = [data.payload, ...prev.slice(0, 39)];
-                try { localStorage.setItem('supreme_live_bets', JSON.stringify(updated)); } catch {}
-                return updated;
-              });
-            } else if (data.type === 'GTPS_LINK' && data.payload) {
-              const { growId, code } = data.payload;
-              const cu = currentUserRef.current;
-              // Hanya berlaku untuk akun yang kode link-nya cocok
-              // (broadcast server dikirim ke SEMUA client)
-              if (growId && cu && String(code || '') === String(cu.linkCode || '')) {
-                updateUserGrowId(growId);
+              showToast('Link GTPS diputus dari sisi game.', 'info', 'GTPS Unlinked');
+            }
+            return;
+          }
+
+          if (data.type === 'GTPS_DEPOSIT' && data.payload) {
+            const p = data.payload;
+            const cu = currentUserRef.current;
+            const myGrow = String(cu?.growId || '').toLowerCase();
+            if (!cu || !myGrow || String(p.growId || '').toLowerCase() !== myGrow) return;
+            try {
+              const walletRes = await apiJson('/api/economy/wallet');
+              if (walletRes.data?.user) {
+                setCurrentUser(walletRes.data.user);
+                currentUserRef.current = walletRes.data.user;
+                setAccounts((prev) => prev.map((account) =>
+                  account.username.toLowerCase() === walletRes.data.user.username.toLowerCase() ? walletRes.data.user : account
+                ));
+                const cur = String(p.currency || 'DL').toUpperCase();
+                const dls = cur === 'BGL' ? Number(p.amount) * 100 : cur === 'WL' ? Number(p.amount) / 100 : Number(p.amount);
+                if (dls > 0) triggerBalanceGain(dls);
+                showToast(`Deposit in-game diterima: +${toActiveAmount(dls)} ${currencyLabel}!`, 'success', 'GTPS Deposit');
               }
-            } else if (data.type === 'GTPS_UNLINK' && data.payload) {
-              const cu = currentUserRef.current;
-              const myGrow = String(cu?.growId || '').toLowerCase();
-              if (cu && myGrow && String(data.payload.growId || '').toLowerCase() === myGrow) {
-                const updated = { ...cu, growId: undefined, gtpsLinked: false };
-                setCurrentUser(updated);
-                try {
-                  localStorage.setItem('supreme_active_session', JSON.stringify(updated));
-                  localStorage.setItem('voidps_active_session', JSON.stringify(updated));
-                } catch {}
-                setAccounts((prev) => {
-                  const next = prev.map((a) =>
-                    a.username.toLowerCase() === cu.username.toLowerCase() ? { ...a, growId: undefined } : a
-                  );
-                  try {
-                    localStorage.setItem('supreme_registered_accounts', JSON.stringify(next));
-                  } catch {}
-                  return next;
-                });
-                showToast('Link GTPS diputus dari sisi game.', 'info', 'GTPS Unlinked');
-              }
-            } else if (data.type === 'GTPS_DEPOSIT' && data.payload) {
-              const p = data.payload;
-              const cu = currentUserRef.current;
-              const myGrow = String(cu?.growId || '').toLowerCase();
-              if (cu && myGrow && String(p.growId || '').toLowerCase() === myGrow) {
-                try {
-                  const walletRes = await apiJson('/api/economy/wallet');
-                  if (walletRes.data?.user) {
-                    setCurrentUser(walletRes.data.user);
-                    currentUserRef.current = walletRes.data.user;
-                    setAccounts(prev => prev.map(a => a.username.toLowerCase() === walletRes.data.user.username.toLowerCase() ? walletRes.data.user : a));
-                    const cur = String(p.currency || 'DL').toUpperCase();
-                    const dls = cur === 'BGL' ? Number(p.amount) * 100 : cur === 'WL' ? Number(p.amount) / 100 : Number(p.amount);
-                    if (dls > 0) triggerBalanceGain(dls);
-                    showToast(`Deposit in-game diterima: +${toActiveAmount(dls)} ${currencyLabel}!`, 'success', 'GTPS Deposit');
-                  }
-                } catch {}
-              }
-          } catch {}
+            } catch {}
+          }
         };
 
         ws.onclose = () => {
@@ -945,7 +952,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         ws.onerror = () => {
           ws?.close();
         };
-      } catch {}
     };
 
     connect();

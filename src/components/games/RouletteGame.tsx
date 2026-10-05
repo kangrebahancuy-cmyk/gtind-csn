@@ -349,14 +349,7 @@ export const RouletteGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
         const wonTotalDls = Number(resolved.payoutDls || 0);
         if (wonTotalDls > 0) {
-          setPayoutResult({ totalWin: wonTotalDls, won: true });
-          sound.playCashout();
-          sound.playWin();
-        } else {
-          setPayoutResult({ totalWin: 0, won: false });
-          sound.playExplosion();
-        }
-
+  
         setPayoutResult({ totalWin: wonTotalDls, won: true });
           sound.playCashout();
           sound.playWin();
