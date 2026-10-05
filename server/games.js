@@ -76,7 +76,7 @@ export function installGameRoutes(app, economy) {
     const action=req.body?.action && typeof req.body.action==='object' ? req.body.action : {};
     const step=Number.isInteger(action.step)?Math.max(0,action.step):0;
     const random=rng(round.serverSeed + ':' + round.clientSeed + ':' + round.nonce + ':' + step);
-    const result=resolveGame(round.gameId,random,action,round.betDls);
+    const result=(round.gameId==='coinflip' && action.cashout===true) ? resolveCashout(round, action) : resolveGame(round.gameId,random,action,round.betDls);
     const payout=Number((result.payout||0).toFixed(2));
     const shouldCredit=action.cashout===true || action.final===true || !['coinflip'].includes(round.gameId);
     let credit={ok:true,balance:round.balanceAfterBet};
@@ -88,6 +88,13 @@ export function installGameRoutes(app, economy) {
     round.lastStep=step; round.result=result; persist();
     res.json({ok:true,roundId:round.id,result,payoutDls:payout,balanceDls:credit.balance,finished:shouldCredit,serverSeed:shouldCredit?round.serverSeed:undefined,serverSeedHash:round.serverSeedHash,clientSeed:round.clientSeed,nonce:round.nonce});
   });
+}
+
+function resolveCashout(round, action) {
+  const mults=[1.92,3.84,7.68,15.36,30.72,61.44,122.88,245.76,491.52];
+  const step=Math.max(0,Math.min(mults.length,Number(action.step)||0));
+  const multiplier=step>0?mults[step-1]:1;
+  return {outcome:'cashout',step,multiplier,payout:round.betDls*multiplier,cashedOut:true};
 }
 
 function resolveGame(gameId,r,action,bet) {
