@@ -16,36 +16,35 @@ This phase adds a server-authoritative game-round API.
 - POST /api/games/resolve
 - GET /api/games/fairness
 
-## Current frontend migration
-Coinflip has been migrated to the server-authoritative round API.
-
-Other games still contain legacy client-side game logic and must be migrated before they are considered production-safe.
-
-## Production requirement
-Do not accept real-value wagers on an un-migrated game. Phase 2 is intentionally incremental so a client-side payout API is not mistaken for secure server-side gambling logic.
-
-## Next
-Migrate Roulette, Mines, Towers, Keno, Blackjack, Cases, Case Battles, Crash and remaining legacy games one by one, with server-side game state and settlement tests.
-
-
-## Current migration status (updated)
-Server-authoritative real-value rounds are currently enabled only for:
+## Current migration status
+All currently server-authorized real-value games use the server round API:
 - Coinflip
 - Mines
 - Towers
 - Roulette
 - Keno
 - Dice
+- Blackjack
+- Cases
+- Case Battles (server-vs-house)
+- Crash
 
-The server rejects round creation for games that have not been migrated yet. This is intentional: Blackjack, Cases, Case Battles, Crash, and any legacy/orphaned game must not accept real-value bets until their complete server state machine is implemented.
+The server rejects any game ID outside this whitelist. The migrated frontend game components contain no calls to the legacy client-side balance settlement methods.
 
 Important:
-- Cases must use a server-owned case catalog; client-supplied item/chance lists are rejected.
-- Crash requires an authoritative shared server round before real-value betting is enabled.
-- Blackjack requires server-owned deck/state/actions.
-- Case Battles requires server-owned lobby, participants, case catalog, RNG, winner and settlement.
-- The current file-backed round/economy store still requires persistent storage and stronger transactional locking before production/high-value use.
+- Game configuration and payout tables used for settlement are server-owned.
+- Cases use a server-owned case catalog in `data/cases.json`.
+- Roulette validates the submitted stake against the amount debited in DLS.
+- Crash settlement uses server-side elapsed time and crash point.
+- True player-vs-player Case Battle matchmaking is intentionally disabled; the real-money path is server-vs-house.
+- File-backed JSON persistence still requires migration to transactional persistent storage before high-value production.
 
+## Validation
+- Added GitHub Actions CI for Vite build and Node syntax checks.
+- Game payout settlement is idempotent by round ID in the economy ledger.
+
+## Production requirement
+Phase 2 game authority is complete at the application-logic level, but production/high-value wagering must wait for transactional persistent storage, concurrency control, and a true shared Crash/PvP matchmaking service.
 
 ## Four-game authority hardening
 
