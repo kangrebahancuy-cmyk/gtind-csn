@@ -7,13 +7,13 @@ export const WL_PER = Object.freeze({ WL:1, DL:100, BGL:10000 });
 
 function id(prefix){ return `${prefix}_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`; }
 function normalizeCurrency(value){ const c=String(value||'DL').trim().toUpperCase(); return CURRENCIES.includes(c)?c:null; }
-function toWl(currency, amount){
+export function currencyAmountToWl(currency, amount){
   const c=normalizeCurrency(currency); const n=Number(amount);
   if(!c || !Number.isFinite(n) || n<=0) return null;
   const units=Math.round(n*WL_PER[c]);
   return units>0 ? units : null;
 }
-function fromWl(currency, units){ return Number(units||0)/WL_PER[currency]; }
+export function wlToCurrencyAmount(currency, units){ return Number(units||0)/WL_PER[currency]; }
 function cleanBalances(value){
   const b=value&&typeof value==='object'?value:{};
   return {WL:Math.max(0,Math.trunc(Number(b.WL)||0)),DL:Math.max(0,Math.trunc(Number(b.DL)||0)),BGL:Math.max(0,Math.trunc(Number(b.BGL)||0))};
@@ -22,9 +22,9 @@ function publicWallet(doc){
   const balancesWl=cleanBalances(doc?.balancesWl);
   return {
     balances: {
-      WL: fromWl('WL',balancesWl.WL),
-      DL: fromWl('DL',balancesWl.DL),
-      BGL: fromWl('BGL',balancesWl.BGL),
+      WL: wlToCurrencyAmount('WL',balancesWl.WL),
+      DL: wlToCurrencyAmount('DL',balancesWl.DL),
+      BGL: wlToCurrencyAmount('BGL',balancesWl.BGL),
     },
     balancesWl,
     updatedAt: doc?.updatedAt || null,
@@ -45,7 +45,7 @@ async function ensureWallet(session,mongo,userId){
   return {...wallet,userId,balancesWl};
 }
 function ledgerDoc({userId,username,type,currency,amount,amountWl,beforeWl,afterWl,referenceId,metadata={}}){
-  return {id:id('txn'),userId,username,type,currency,amount,amountWl,amountDls:amountWl/100,balanceBefore:fromWl(currency,beforeWl),balanceAfter:fromWl(currency,afterWl),balanceBeforeWl:beforeWl,balanceAfterWl:afterWl,referenceId:referenceId||null,metadata,createdAt:new Date()};
+  return {id:id('txn'),userId,username,type,currency,amount,amountWl,amountDls:amountWl/100,balanceBefore:wlToCurrencyAmount(currency,beforeWl),balanceAfter:wlToCurrencyAmount(currency,afterWl),balanceBeforeWl:beforeWl,balanceAfterWl:afterWl,referenceId:referenceId||null,metadata,createdAt:new Date()};
 }
 async function mutateCurrency(session,mongo,{userId,username,type,currency,amountWl,referenceId,metadata}){
   const wallet=await ensureWallet(session,mongo,userId);
@@ -59,7 +59,7 @@ async function mutateCurrency(session,mongo,{userId,username,type,currency,amoun
     {session}
   );
   if(result.modifiedCount!==1){ const e=new Error('WALLET_WRITE_CONFLICT'); e.code='WALLET_WRITE_CONFLICT'; throw e; }
-  await mongo.collection('ledger').insertOne(ledgerDoc({userId,username,type,currency,amount:fromWl(currency,amountWl),amountWl,beforeWl:before,afterWl:after,referenceId,metadata}),{session});
+  await mongo.collection('ledger').insertOne(ledgerDoc({userId,username,type,currency,amount:wlToCurrencyAmount(currency,amountWl),amountWl,beforeWl:before,afterWl:after,referenceId,metadata}),{session});
   return {beforeWl:before,afterWl:after,balancesWl:next};
 }
 export async function getWallet(userId){
@@ -72,7 +72,7 @@ export async function getWallet(userId){
   });
 }
 export async function debitForGame(userId,amountDls,gameId){
-  const amountWl=toWl('DL',amountDls);
+  const amountWl=currencyAmountToWl('DL',amountDls);
   if(!amountWl) return {ok:false,error:'invalid_amount'};
   const referenceId=id('bet');
   try{
@@ -134,7 +134,7 @@ export function installWalletRoutes(app,{sessionUser,getGtpsSecret,gtpsBridgeUrl
     const sender=await requireAuth(req,res,sessionUser); if(!sender)return;
     const target=String(req.body?.targetUser||'').trim();
     const currency=normalizeCurrency(req.body?.currency||'DL');
-    const amountWl=toWl(currency,req.body?.amount);
+    const amountWl=currencyAmountToWl(currency,req.body?.amount);
     const message=String(req.body?.message||'').slice(0,200);
     if(!target||!currency||!amountWl)return res.status(400).json({ok:false,error:'invalid_tip'});
     const mongo=await getMongoDb();
@@ -152,7 +152,7 @@ export function installWalletRoutes(app,{sessionUser,getGtpsSecret,gtpsBridgeUrl
       if(result.error==='recipient_not_found')return res.status(404).json({ok:false,error:result.error});
       if(result.error==='self_tip')return res.status(400).json({ok:false,error:result.error});
       const wallet=publicWallet({balancesWl:result.balancesWl});
-      res.json({ok:true,user:publicUser(result.from,wallet),recipient:{username:result.to.username},currency,amount:fromWl(currency,amountWl),wallet});
+      res.json({ok:true,user:publicUser(result.from,wallet),recipient:{username:result.to.username},currency,amount:wlToCurrencyAmount(currency,amountWl),wallet});
     }catch(error){
       if(error.code==='INSUFFICIENT_BALANCE')return res.status(400).json({ok:false,error:error.message});
       throw error;
@@ -163,7 +163,7 @@ export function installWalletRoutes(app,{sessionUser,getGtpsSecret,gtpsBridgeUrl
     const admin=await requireAuth(req,res,sessionUser); if(!admin||!admin.isAdmin)return res.status(403).json({ok:false,error:'admin_required'});
     const username=String(req.body?.username||'').trim();
     const currency=normalizeCurrency(req.body?.currency||'DL');
-    const amountWl=toWl(currency,req.body?.amount);
+    const amountWl=currencyAmountToWl(currency,req.body?.amount);
     const mode=req.body?.mode;
     if(!username||!currency||!amountWl||!['add','remove'].includes(mode))return res.status(400).json({ok:false,error:'invalid_request'});
     const mongo=await getMongoDb();
@@ -189,7 +189,7 @@ export function installWalletRoutes(app,{sessionUser,getGtpsSecret,gtpsBridgeUrl
     const transactionId=String(req.body?.transactionId||'').trim();
     const growId=String(req.body?.growId||'').trim();
     const currency=normalizeCurrency(req.body?.currency||'DL');
-    const amountWl=toWl(currency,req.body?.amount);
+    const amountWl=currencyAmountToWl(currency,req.body?.amount);
     if(!transactionId||!growId||!currency||!amountWl)return res.status(400).json({ok:false,error:'invalid_deposit'});
     try{
       const result=await withMongoTransaction(async(session,db)=>{
@@ -198,13 +198,13 @@ export function installWalletRoutes(app,{sessionUser,getGtpsSecret,gtpsBridgeUrl
         const user=await db.collection('users').findOne({growIdNormalized:growId.toLowerCase()},{session});
         if(!user)return {error:'growid_not_linked'};
         const r=await mutateCurrency(session,db,{userId:user.id,username:user.username,type:'DEPOSIT',currency,amountWl,referenceId:transactionId,metadata:{growId,currency,amount:Number(req.body.amount)}});
-        const deposit={transactionId,growId,userId:user.id,username:user.username,currency,amount:fromWl(currency,amountWl),amountWl,status:'COMPLETED',createdAt:new Date()};
+        const deposit={transactionId,growId,userId:user.id,username:user.username,currency,amount:wlToCurrencyAmount(currency,amountWl),amountWl,status:'COMPLETED',createdAt:new Date()};
         await db.collection('deposits').insertOne(deposit,{session});
         return {user,deposit,r};
       });
       if(result.duplicate)return res.json({ok:true,duplicate:true,deposit:result.deposit});
       if(result.error==='growid_not_linked')return res.status(404).json({ok:false,error:result.error});
-      if(typeof broadcast==='function')broadcast({type:'GTPS_DEPOSIT',payload:{growId,currency,amount:fromWl(currency,amountWl),transactionId,timestamp:Date.now()}});
+      if(typeof broadcast==='function')broadcast({type:'GTPS_DEPOSIT',payload:{growId,currency,amount:wlToCurrencyAmount(currency,amountWl),transactionId,timestamp:Date.now()}});
       res.json({ok:true,duplicate:false,deposit:result.deposit,wallet:publicWallet({balancesWl:result.r.balancesWl})});
     }catch(error){res.status(500).json({ok:false,error:'deposit_failed'});}
   });
@@ -213,7 +213,7 @@ export function installWalletRoutes(app,{sessionUser,getGtpsSecret,gtpsBridgeUrl
     const user=await requireAuth(req,res,sessionUser); if(!user)return;
     const growId=String(user.growId||'').trim();
     const currency=normalizeCurrency(req.body?.currency||'DL');
-    const amountWl=toWl(currency,req.body?.amount);
+    const amountWl=currencyAmountToWl(currency,req.body?.amount);
     if(!growId||!user.gtpsLinked)return res.status(400).json({ok:false,error:'growid_belum_link'});
     if(!currency||!amountWl)return res.status(400).json({ok:false,error:'invalid_amount'});
     const idempotencyKey=String(req.headers['idempotency-key']||'').trim().slice(0,128);
@@ -225,13 +225,13 @@ export function installWalletRoutes(app,{sessionUser,getGtpsSecret,gtpsBridgeUrl
           if(prior)return {duplicate:true,withdrawal:prior};
         }
         const fresh=await db.collection('users').findOne({id:user.id},{session});
-        const r=await mutateCurrency(session,db,{userId:user.id,username:fresh.username,type:'WITHDRAW_PENDING',currency,amountWl:-amountWl,referenceId:withdrawalId,metadata:{growId,currency,amount:fromWl(currency,amountWl)}});
-        const withdrawal={id:withdrawalId,userId:user.id,username:fresh.username,growId,currency,amount:fromWl(currency,amountWl),amountWl,status:'PENDING',idempotencyKey:idempotencyKey||null,createdAt:new Date()};
+        const r=await mutateCurrency(session,db,{userId:user.id,username:fresh.username,type:'WITHDRAW_PENDING',currency,amountWl:-amountWl,referenceId:withdrawalId,metadata:{growId,currency,amount:wlToCurrencyAmount(currency,amountWl)}});
+        const withdrawal={id:withdrawalId,userId:user.id,username:fresh.username,growId,currency,amount:wlToCurrencyAmount(currency,amountWl),amountWl,status:'PENDING',idempotencyKey:idempotencyKey||null,createdAt:new Date()};
         await db.collection('withdrawals').insertOne(withdrawal,{session});
         return {withdrawal,r};
       });
       if(reserved.duplicate)return res.json({ok:true,duplicate:true,status:reserved.withdrawal.status,withdrawalId:reserved.withdrawal.id,wallet:await getWallet(user.id)});
-      const bridgeRes=await fetch(`${gtpsBridgeUrl}/supreme/withdraw`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({secretKey:getGtpsSecret(),withdrawalId,growId,currency,amount:fromWl(currency,amountWl)})});
+      const bridgeRes=await fetch(`${gtpsBridgeUrl}/supreme/withdraw`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({secretKey:getGtpsSecret(),withdrawalId,growId,currency,amount:wlToCurrencyAmount(currency,amountWl)})});
       const data=await bridgeRes.json().catch(()=>({ok:false,error:'bridge_invalid_response'}));
       if(!data.ok){
         await withMongoTransaction(async(session,db)=>{
@@ -270,7 +270,7 @@ export function installWalletRoutes(app,{sessionUser,getGtpsSecret,gtpsBridgeUrl
       const actual=cleanBalances(wallet.balancesWl); const expected=sums.get(String(wallet.userId))||{WL:0,DL:0,BGL:0};
       for(const currency of CURRENCIES){
         const delta=actual[currency]-expected[currency];
-        if(delta!==0) discrepancies.push({userId:wallet.userId,currency,balance:fromWl(currency,actual[currency]),ledgerBalance:fromWl(currency,expected[currency]),delta:fromWl(currency,delta),deltaWl:delta});
+        if(delta!==0) discrepancies.push({userId:wallet.userId,currency,balance:wlToCurrencyAmount(currency,actual[currency]),ledgerBalance:wlToCurrencyAmount(currency,expected[currency]),delta:wlToCurrencyAmount(currency,delta),deltaWl:delta});
       }
     }
     res.json({ok:true,consistent:discrepancies.length===0,checkedWallets:wallets.length,discrepancies,checkedAt:new Date().toISOString(),baseUnit:'WL'});
