@@ -1,6 +1,6 @@
 # GTIND-CSN Phase 3 — MongoDB Atlas
 
-Status: **MIGRATION FOUNDATION COMPLETE — production cutover still requires Atlas credentials and async runtime migration.**
+Status: **IN PROGRESS — economy/auth/game settlement cut over to Atlas; shared Crash/Case Battle state and final CI verification remain.**
 
 MongoDB Atlas is now the selected production persistence target. The repository contains the Atlas connection manager, schema/indexes, initialization command, and an idempotent migration path for the existing JSON/SQLite data.
 
@@ -27,7 +27,7 @@ The migration is idempotent and uses MongoDB transactions for the account/wallet
 
 ## Production cutover requirements
 
-The existing economy and game HTTP handlers are synchronous and currently use the SQLite/JSON storage layer. The official MongoDB Node.js driver is asynchronous, so replacing that layer correctly requires making the money-moving request path asynchronous rather than blocking the Node.js event loop.
+Economy/auth HTTP handlers are now async and use Atlas collections. Wallet debit and game payout are executed with MongoDB transactions. Crash/Case Battle room state is the remaining shared-state cutover.
 
 Do not claim the casino is MongoDB-backed in production until:
 1. economy routes use Atlas as source of truth;
