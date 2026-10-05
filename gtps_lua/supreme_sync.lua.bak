@@ -1,0 +1,419 @@
+-- ============================================================
+-- SUPREME CASINO - GTPS.CLOUD SYNC ENGINE v2.0
+-- Compatible with: gtps.cloud Lua API (dash.gtps.cloud/docs)
+-- HTTP API: http:get(url, headers) / http:post(url, headers, postData)
+-- ============================================================
+
+-- ============================================================
+-- KONFIGURASI - GANTI DENGAN NILAI KAMU
+-- ============================================================
+local WEB_API_URL  = "https://YOUR-CASINO-WEBSITE.onrender.com/api"  -- URL publik website casino kamu
+local SECRET_KEY   = "supreme_gtps_secret_auth_token_25741"           -- Harus sama dengan server.js
+
+local ITEM_WL  = 242
+local ITEM_DL  = 1796
+local ITEM_BGL = 7188
+
+-- ============================================================
+-- DATABASE SQLite (Persistent - tidak hilang saat server restart)
+-- ============================================================
+local db = sqlite:open("supreme_casino.db")
+
+db:exec([[
+    CREATE TABLE IF NOT EXISTS accounts (
+        username TEXT PRIMARY KEY,
+        balance  REAL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS links (
+        growid   TEXT PRIMARY KEY,
+        username TEXT NOT NULL
+    );
+]])
+
+-- ============================================================
+-- DB HELPERS
+-- ============================================================
+local function getBalance(username)
+    local rows = db:query("SELECT balance FROM accounts WHERE username = ?", { username })
+    if rows and rows[1] then return tonumber(rows[1].balance) or 0 end
+    return 0
+end
+
+local function setBalance(username, amount)
+    amount = math.max(0, amount)
+    db:exec("INSERT OR REPLACE INTO accounts (username, balance) VALUES (?, ?)", { username, amount })
+end
+
+local function getLinkedUsername(growid)
+    local rows = db:query("SELECT username FROM links WHERE growid = ?", { string.lower(growid) })
+    if rows and rows[1] then return rows[1].username end
+    return nil
+end
+
+local function setLink(growid, username)
+    db:exec("INSERT OR REPLACE INTO links (growid, username) VALUES (?, ?)", { string.lower(growid), string.lower(username) })
+end
+
+-- ============================================================
+-- HTTP HELPERS (gtps.cloud API: http:get / http:post)
+-- Semua HTTP call WAJIB di dalam coroutine
+-- ============================================================
+local JSON_HEADERS = { ["Content-Type"] = "application/json" }
+
+local function asyncPost(url, payload)
+    coroutine.wrap(function()
+        local ok, err = pcall(function()
+            http:post(url, JSON_HEADERS, tostring(payload or "{}"))
+        end)
+        if not ok then
+            print("[SUPREME] HTTP POST error: " .. tostring(err))
+        end
+    end)()
+end
+
+local function asyncGet(url, callback)
+    coroutine.wrap(function()
+        local ok, result = pcall(function()
+            return http:get(url, JSON_HEADERS)
+        end)
+        if ok and result and callback then
+            callback(result)
+        end
+    end)()
+end
+
+-- ============================================================
+-- SEND WEBHOOK ke website casino
+-- ============================================================
+local function webhookDeposit(growid, currency, amount)
+    local payload = string.format(
+        '{"growId":"%s","currency":"%s","amount":%d,"secretKey":"%s"}',
+        growid, currency, amount, SECRET_KEY
+    )
+    asyncPost(WEB_API_URL .. "/gtps/deposit-webhook", payload)
+end
+
+local function webhookWithdraw(growid, currency, amount)
+    local payload = string.format(
+        '{"growId":"%s","currency":"%s","amount":%d,"secretKey":"%s"}',
+        growid, currency, amount, SECRET_KEY
+    )
+    asyncPost(WEB_API_URL .. "/gtps/withdraw-webhook", payload)
+end
+
+local function webhookLink(growid, code, username)
+    local payload = string.format(
+        '{"growid":"%s","code":"%s","username":"%s"}',
+        growid, code, username
+    )
+    asyncPost(WEB_API_URL .. "/gtps/link-growid", payload)
+end
+
+-- ============================================================
+-- CHECK LINK CODE dari website (polling saat player ketik /link)
+-- ============================================================
+local function checkAndApplyCode(player, code)
+    local growid = player:getName()
+    local cleanCode = string.gsub(tostring(code or ""), "%s+", "")
+    if cleanCode == "" then
+        player:sendConsoleMessage("`4[SUPREME] Masukkan kode 6 digit dari website casino!``")
+        return
+    end
+
+    asyncGet(WEB_API_URL .. "/gtps/check-link?code=" .. cleanCode, function(response)
+        -- Response: {"linked":true,"growId":"xxx","code":"123456"}
+        -- atau website belum link: {"linked":false}
+        -- Kita lakukan linking dari sisi Lua dulu,
+        -- lalu kirim webhook ke website
+        local username = string.lower(cleanCode) -- fallback sementara pakai kode sebagai username
+
+        -- Coba parse JSON response sederhana
+        if response and type(response) == "table" and response.body then
+            local body = tostring(response.body)
+            local linkedUsername = body:match('"username"%s*:%s*"([^"]+)"')
+            if linkedUsername and linkedUsername ~= "" then
+                username = string.lower(linkedUsername)
+            end
+        end
+
+        -- Simpan link ke DB
+        setLink(growid, username)
+
+        -- Buat akun jika belum ada
+        if getBalance(username) == 0 then
+            setBalance(username, 0)
+        end
+
+        -- Kirim webhook ke website
+        webhookLink(growid, cleanCode, username)
+
+        -- Notif ke player
+        player:sendConsoleMessage("`2[SUPREME] Berhasil! GrowID `6" .. growid .. "`2 terhubung ke akun casino!``")
+        player:sendConsoleMessage("`2[SUPREME] Ketik `6/balance`2 untuk cek saldo, `6/deposit`2 untuk deposit!``")
+    end)
+end
+
+-- ============================================================
+-- DIALOG: /casino
+-- ============================================================
+local function showCasinoDialog(player)
+    local growid = player:getName()
+    local linkedUser = getLinkedUsername(growid)
+    local bal = linkedUser and getBalance(linkedUser) or 0
+    local siteUser = linkedUser or "(Belum linked)"
+
+    local d = {}
+    table.insert(d, "set_bg_color|18,22,34,235|\n")
+    table.insert(d, "set_border_color|214,168,73,255|\n")
+    table.insert(d, "set_default_color|`o\n")
+    table.insert(d, "add_label_with_icon|big|`6Supreme Casino Portal|left|14714|\n")
+    table.insert(d, "add_smalltext|`9GTPS Cloud In-Game Cashier|\n")
+    table.insert(d, "add_spacer|small|\n")
+    table.insert(d, "add_textbox|`wGrowID: `2" .. growid .. "|\n")
+    table.insert(d, "add_textbox|`wAkun Casino: `6" .. siteUser .. "|\n")
+    table.insert(d, "add_textbox|`wSaldo: `2" .. math.floor(bal) .. " DLS `o(`2" .. string.format("%.2f", bal / 100) .. " BGL`o)|\n")
+    table.insert(d, "add_spacer|small|\n")
+    table.insert(d, "add_textbox|`6Perintah:|\n")
+    table.insert(d, "add_smalltext|`w/deposit <jumlah> [wl|dl|bgl]|\n")
+    table.insert(d, "add_smalltext|`w/withdraw <jumlah> [wl|dl|bgl]|\n")
+    table.insert(d, "add_smalltext|`w/link <kode>  - Link akun web casino|\n")
+    table.insert(d, "add_smalltext|`w/balance      - Cek saldo|\n")
+    table.insert(d, "add_spacer|small|\n")
+    table.insert(d, "add_button|btn_link|`6Masukkan Kode Link|staticYellowFrame|0|0\n")
+    table.insert(d, "add_quick_exit|\n")
+    table.insert(d, "end_dialog|supreme_casino_menu|Tutup||\n")
+
+    player:sendDialog(table.concat(d))
+end
+
+-- ============================================================
+-- DIALOG: /link (input kode)
+-- ============================================================
+local function showLinkDialog(player)
+    local d = {}
+    table.insert(d, "set_bg_color|18,22,34,235|\n")
+    table.insert(d, "set_border_color|214,168,73,255|\n")
+    table.insert(d, "set_default_color|`o\n")
+    table.insert(d, "add_label_with_icon|big|`6Link Akun Casino|left|18|\n")
+    table.insert(d, "add_smalltext|`9Hubungkan GrowID kamu dengan akun web casino!|\n")
+    table.insert(d, "add_spacer|small|\n")
+    table.insert(d, "add_textbox|`wGrowID kamu: `2" .. player:getName() .. "|\n")
+    table.insert(d, "add_textbox|`6Masukkan kode 6 digit dari Web Casino → Wallet → Link GTPS:|\n")
+    table.insert(d, "add_spacer|small|\n")
+    table.insert(d, "add_text_input|inp_link_code|Kode 6 Digit:||6|\n")
+    table.insert(d, "add_spacer|small|\n")
+    table.insert(d, "add_quick_exit|\n")
+    table.insert(d, "end_dialog|supreme_link_dialog|Batal|Link Sekarang|\n")
+
+    player:sendDialog(table.concat(d))
+end
+
+-- ============================================================
+-- COMMAND PROCESSOR
+-- ============================================================
+local function handleCommand(player, cmd, arg)
+    local growid = player:getName()
+    cmd = string.lower(cmd or "")
+    arg = arg or ""
+
+    -- /casino or /supreme
+    if cmd == "casino" or cmd == "supreme" then
+        showCasinoDialog(player)
+        return true
+    end
+
+    -- /casinohelp
+    if cmd == "casinohelp" then
+        player:sendConsoleMessage("`6===== [ SUPREME CASINO ] =====``")
+        player:sendConsoleMessage("`2/casino `w- Buka panel casino``")
+        player:sendConsoleMessage("`2/deposit <jml> [wl|dl|bgl] `w- Deposit ke casino``")
+        player:sendConsoleMessage("`2/withdraw <jml> [wl|dl|bgl] `w- Withdraw ke backpack``")
+        player:sendConsoleMessage("`2/link <kode> `w- Link akun web casino``")
+        player:sendConsoleMessage("`2/balance `w- Cek saldo casino``")
+        player:sendConsoleMessage("`6================================``")
+        return true
+    end
+
+    -- /link [kode]
+    if cmd == "link" or cmd == "setgrowid" then
+        local code = arg:match("(%d%d%d%d%d%d?)")
+        if not code or code == "" then
+            showLinkDialog(player)
+            return true
+        end
+        checkAndApplyCode(player, code)
+        return true
+    end
+
+    -- /balance or /bal
+    if cmd == "balance" or cmd == "bal" then
+        local linkedUser = getLinkedUsername(growid)
+        if not linkedUser then
+            player:sendConsoleMessage("`4[SUPREME] Kamu belum link akun! Ketik `6/link <kode>`4 dulu.``")
+            return true
+        end
+        local bal = getBalance(linkedUser)
+        player:sendConsoleMessage("`2[SUPREME] GrowID: `6" .. growid .. " `w| Akun: `6" .. linkedUser .. " `w| Saldo: `2" .. math.floor(bal) .. " DLS `w(`2" .. string.format("%.2f", bal / 100) .. " BGL`w)``")
+        return true
+    end
+
+    -- /deposit <amount> [wl|dl|bgl]
+    if cmd == "deposit" or cmd == "dep" then
+        local amtStr, curStr = arg:match("^(%d+)%s*(%a*)$")
+        local amt = tonumber(amtStr) or 0
+        curStr = string.lower(curStr or "dl")
+        if curStr == "" then curStr = "dl" end
+
+        if amt <= 0 then
+            player:sendConsoleMessage("`4[SUPREME] Contoh: `6/deposit 50 dl`4 atau `6/deposit 1 bgl``")
+            return true
+        end
+
+        local linkedUser = getLinkedUsername(growid)
+        if not linkedUser then
+            player:sendConsoleMessage("`4[SUPREME] Kamu belum link akun casino! Ketik `6/link <kode>``")
+            return true
+        end
+
+        local itemId, currencyName, dlsValue
+        if curStr == "bgl" then
+            itemId = ITEM_BGL; currencyName = "BGL"; dlsValue = amt * 100
+        elseif curStr == "wl" then
+            itemId = ITEM_WL;  currencyName = "WL";  dlsValue = amt / 100
+        else
+            itemId = ITEM_DL;  currencyName = "DL";  dlsValue = amt
+        end
+
+        local currentInInv = player:getInventoryItemCount(itemId)
+        if currentInInv < amt then
+            player:sendConsoleMessage("`4[SUPREME] Item tidak cukup! Kamu punya " .. currentInInv .. " " .. currencyName .. ", butuh " .. amt .. "``")
+            return true
+        end
+
+        -- Kurangi item dari inventory
+        player:removeItem(itemId, amt)
+
+        -- Tambah saldo casino
+        local currentBal = getBalance(linkedUser)
+        local newBal = currentBal + dlsValue
+        setBalance(linkedUser, newBal)
+
+        player:sendConsoleMessage("`2[SUPREME] Berhasil deposit `2" .. amt .. " " .. currencyName .. "`2! Saldo baru: `6" .. math.floor(newBal) .. " DLS``")
+
+        -- Kirim webhook ke website
+        webhookDeposit(growid, currencyName, amt)
+        return true
+    end
+
+    -- /withdraw <amount> [wl|dl|bgl]
+    if cmd == "withdraw" or cmd == "wd" or cmd == "with" then
+        local amtStr, curStr = arg:match("^(%d+)%s*(%a*)$")
+        local amt = tonumber(amtStr) or 0
+        curStr = string.lower(curStr or "dl")
+        if curStr == "" then curStr = "dl" end
+
+        if amt <= 0 then
+            player:sendConsoleMessage("`4[SUPREME] Contoh: `6/withdraw 10 dl`4 atau `6/withdraw 1 bgl``")
+            return true
+        end
+
+        local linkedUser = getLinkedUsername(growid)
+        if not linkedUser then
+            player:sendConsoleMessage("`4[SUPREME] Kamu belum link akun casino! Ketik `6/link <kode>``")
+            return true
+        end
+
+        local itemId, currencyName, dlsCost
+        if curStr == "bgl" then
+            itemId = ITEM_BGL; currencyName = "BGL"; dlsCost = amt * 100
+        elseif curStr == "wl" then
+            itemId = ITEM_WL;  currencyName = "WL";  dlsCost = amt / 100
+        else
+            itemId = ITEM_DL;  currencyName = "DL";  dlsCost = amt
+        end
+
+        local currentBal = getBalance(linkedUser)
+        if currentBal < dlsCost then
+            player:sendConsoleMessage("`4[SUPREME] Saldo tidak cukup! Saldo: `4" .. math.floor(currentBal) .. " DLS`4, butuh: `4" .. math.floor(dlsCost) .. " DLS``")
+            return true
+        end
+
+        -- Kurangi saldo casino
+        setBalance(linkedUser, currentBal - dlsCost)
+
+        -- Beri item ke player
+        player:giveItem(itemId, amt)
+
+        player:sendConsoleMessage("`2[SUPREME] Berhasil withdraw `2" .. amt .. " " .. currencyName .. "`2! Sudah masuk backpack. Sisa: `6" .. math.floor(currentBal - dlsCost) .. " DLS``")
+
+        -- Kirim webhook ke website
+        webhookWithdraw(growid, currencyName, amt)
+        return true
+    end
+
+    return false
+end
+
+-- ============================================================
+-- CALLBACK: onPlayerCommandCallback
+-- Dipanggil saat player mengetik /perintah di game
+-- ============================================================
+onPlayerCommandCallback(function(world, player, command, args)
+    -- gtps.cloud: command = string perintah (tanpa /), args = argumen
+    local cmd = string.lower(tostring(command or ""))
+    local arg = tostring(args or "")
+    return handleCommand(player, cmd, arg)
+end)
+
+-- ============================================================
+-- CALLBACK: onPlayerDialogCallback
+-- Dipanggil saat player submit dialog
+-- ============================================================
+onPlayerDialogCallback(function(world, player, dialogName, buttonClicked, data)
+    local dName = tostring(dialogName or "")
+    local btn   = tostring(buttonClicked or "")
+
+    -- Dialog: Input kode link
+    if dName == "supreme_link_dialog" then
+        if btn == "Batal" or btn == "" then return true end
+        local code = ""
+        if type(data) == "table" then
+            code = tostring(data.inp_link_code or data["inp_link_code"] or "")
+        end
+        code = string.gsub(code, "%s+", "")
+        if code ~= "" then
+            checkAndApplyCode(player, code)
+        else
+            player:sendConsoleMessage("`4[SUPREME] Kode tidak boleh kosong!``")
+        end
+        return true
+    end
+
+    -- Dialog: Menu casino
+    if dName == "supreme_casino_menu" then
+        if btn == "btn_link" then
+            showLinkDialog(player)
+        end
+        return true
+    end
+
+    return false
+end)
+
+-- ============================================================
+-- REGISTER COMMANDS ke gtps.cloud
+-- ============================================================
+registerCommand("casino",     "Buka panel Supreme Casino")
+registerCommand("supreme",    "Buka panel Supreme Casino")
+registerCommand("casinohelp", "Bantuan perintah casino")
+registerCommand("deposit",    "Deposit ke casino: /deposit <jml> [wl|dl|bgl]")
+registerCommand("dep",        "Deposit ke casino: /dep <jml> [wl|dl|bgl]")
+registerCommand("withdraw",   "Withdraw dari casino: /withdraw <jml> [wl|dl|bgl]")
+registerCommand("wd",         "Withdraw dari casino: /wd <jml> [wl|dl|bgl]")
+registerCommand("with",       "Withdraw dari casino: /with <jml> [wl|dl|bgl]")
+registerCommand("link",       "Link akun casino: /link <kode 6 digit>")
+registerCommand("balance",    "Cek saldo casino")
+registerCommand("bal",        "Cek saldo casino")
+
+print("[SUPREME CASINO] Script loaded! Siap digunakan di gtps.cloud")
+print("[SUPREME CASINO] Website API: " .. WEB_API_URL)

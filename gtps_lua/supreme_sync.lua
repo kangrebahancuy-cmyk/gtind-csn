@@ -1,534 +1,423 @@
 -- ============================================================
--- SUPREME CASINO - IN-GAME GTPS CLOUD SYNC ENGINE
--- Universal Multi-Hook Architecture (Command + Chat + Action + Packet)
--- Server Port: 25741
+-- SUPREME CASINO - GTPS.CLOUD SYNC ENGINE v2.2
+-- Dijalankan di: server GTPS gtps.cloud (dashboard -> Scripts)
+--
+-- CATATAN PENTING RUNTIME gtps.cloud (dari pengujian nyata):
+-- - TIDAK ADA pcall / xpcall -> jangan pakai try-catch
+-- - sqlite.open dipanggil dengan TITIK -> diganti total agar aman:
+--   penyimpanan pakai saveStringToServer / loadStringFromServer
+--   (API yang sama dengan server_utilities.lua)
+-- - Method player pakai TITIK-DUA (player:getName dll) - terbukti jalan
+--
+-- KONTRAK DENGAN server.js (web casino di Render):
+--   GTPS -> WEB (http:post/get):
+--   GET  {WEB_API_URL}/gtps/check-link?code=XXXXXX
+--   POST {WEB_API_URL}/gtps/link-growid       {growid, code, username}
+--   POST {WEB_API_URL}/gtps/deposit-webhook   {growId, currency, amount, secretKey}
+--   POST {WEB_API_URL}/gtps/withdraw-webhook  {growId, currency, amount, secretKey}
+--
+--   WEB -> GTPS (bridge onHTTPRequest):
+--   URL dasar: https://api.gtps.cloud/g-api/{server_port}/...
+--   GET  /supreme/ping
+--   POST /supreme/withdraw   {secretKey, growId, currency, amount}
 -- ============================================================
+
+-- ============================================================
+-- KONFIGURASI - WAJIB DIGANTI SEBELUM UPLOAD
+-- ============================================================
+local WEB_API_URL = "https://YOUR-CASINO-WEBSITE.onrender.com/api" -- TODO: ganti dengan URL web casino kamu (akhiran /api)
+local SECRET_KEY  = "supreme_gtps_secret_auth_token_25741"         -- harus sama persis dengan server.js
 
 local ITEM_WL  = 242
 local ITEM_DL  = 1796
 local ITEM_BGL = 7188
 
-local DEFAULT_GTPS_PORT = 25741
-local SECRET_KEY = "supreme_gtps_secret_auth_token_25741"
-local WEB_API_URL = "http://localhost:3000/api"
+-- ============================================================
+-- PENYIMPANAN (saveStringToServer / loadStringFromServer)
+-- Format tiap baris: "A|username|saldo" (akun) / "L|growid|username" (link)
+-- ============================================================
+local STORE_KEY = "SUPREME_CASINO_DB_V1"
 
-local DB_KEY = "SUPREME_ACCOUNTS_V1"
-local LINKS_KEY = "SUPREME_LINKS_V1"
-local DEV_ROLE = 51
+local accounts = {} -- username(lowercase) -> saldo DLS (number)
+local links    = {} -- growid(lowercase)   -> username(lowercase)
 
--- In-memory state
-local accounts = {}
-local playerLinks = {}
-local dirty = false
+local function cleanKey(s)
+    return (tostring(s or ""):gsub("[|\r\n]", " "))
+end
+
+local function normUser(s)
+    return string.lower(cleanKey(s))
+end
+
+local function loadStore()
+    local raw = loadStringFromServer(STORE_KEY)
+    if type(raw) ~= "string" or raw == "" or raw == "0" then return end
+    for line in raw:gmatch("[^\r\n]+") do
+        local kind, f1, f2 = line:match("^(%a)|([^|]*)|([^|]*)$")
+        if kind == "A" then
+            accounts[string.lower(f1)] = tonumber(f2) or 0
+        elseif kind == "L" then
+            links[string.lower(f1)] = string.lower(f2)
+        end
+    end
+end
+
+local function saveStore()
+    local lines = {}
+    for u, b in pairs(accounts) do
+        table.insert(lines, "A|" .. u .. "|" .. tostring(b))
+    end
+    for g, u in pairs(links) do
+        table.insert(lines, "L|" .. g .. "|" .. u)
+    end
+    saveStringToServer(STORE_KEY, table.concat(lines, "\n"))
+end
+
+loadStore()
+
+local function getBalance(username)
+    return accounts[normUser(username)] or 0
+end
+
+local function setBalance(username, amount)
+    accounts[normUser(username)] = math.max(0, tonumber(amount) or 0)
+    saveStore()
+end
+
+local function getLinkedUsername(growid)
+    return links[normUser(growid)]
+end
+
+local function setLink(growid, username)
+    links[normUser(growid)] = normUser(username)
+    saveStore()
+end
 
 -- ============================================================
--- SAFE HTTP HELPERS (Blocks Private/Local IPs to prevent C++ Crash)
+-- HTTP HELPERS (API gtps.cloud)
+-- - WAJIB di dalam coroutine (yield saat menunggu respons)
+-- - http:get(url, headers) / http:post(url, headers, body)
+-- - Balikan: (body, status); status = -1 artinya gagal
+-- - Request ke IP lokal/private DIBLOKIR -> web harus URL publik
+-- - TANPA pcall (tidak ada di sandbox) -> argumen dibetulkan dulu
 -- ============================================================
-local function isLocalOrPrivateUrl(url)
-    if not url then return true end
-    local u = tostring(url):lower()
-    if u:find("localhost") or u:find("127%.0%.0%.1") or u:find("0%.0%.0%.0") then
-        return true
-    end
-    if u:find("192%.168%.") or u:find("10%.%d+%.") or u:find("172%.1[6-9]%.") or u:find("172%.2%d%.") or u:find("172%.3[0-1]%.") then
-        return true
-    end
-    -- Must have a public dot domain like .com, .onrender.com, etc.
-    if not u:find("^https?://[%a%d%-]+%.") then
-        return true
-    end
-    return false
+local JSON_HEADERS = { ["Content-Type"] = "application/json" }
+
+local function jsonStrField(body, key)
+    return tostring(body or ""):match('"' .. key .. '"%s*:%s*"([^"]*)"')
 end
 
-local function safeHttpPost(url, jsonPayload)
-    if not url or isLocalOrPrivateUrl(url) then
-        -- Silently skip localhost to avoid C++ "Blocked request to local or private IP"
-        return
-    end
-    if type(http) == "table" and type(http.post) == "function" then
-        http.post(url, tostring(jsonPayload or "{}"), "application/json")
-    end
+local function jsonNumField(body, key)
+    local v = tostring(body or ""):match('"' .. key .. '"%s*:%s*(-?%d+%.?%d*)')
+    return tonumber(v)
 end
 
-local function safeHttpGet(url)
-    if not url or isLocalOrPrivateUrl(url) then
-        return
-    end
-    if type(http) == "table" and type(http.get) == "function" then
-        http.get(url)
-    end
-end
-
--- ============================================================
--- HELPER FUNCTIONS
--- ============================================================
-local function commas(n)
-    local s = tostring(math.floor(tonumber(n) or 0))
-    s = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
-    return (s:gsub("^,", ""))
-end
-
-local function esc(s)
-    s = tostring(s or "")
-    return (s:gsub("|", "/"):gsub("[\r\n]", " "))
-end
-
-local function cleanName(name)
-    if not name then return "" end
-    local s = tostring(name):lower()
-    s = s:gsub("`.", "")
-    s = s:gsub("[^%a%d_]", "")
+local function jsonEscape(s)
+    s = tostring(s or ""):gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("[\r\n]", " ")
     return s
 end
 
-local function getPlayerName(player)
-    if not player then return "Guest" end
-    if type(player.getCleanName) == "function" then
-        local n = player:getCleanName()
-        if n and n ~= "" then return cleanName(n) end
+local function asyncPost(url, payload)
+    if not http then
+        print("[SUPREME] http API tidak tersedia!")
+        return
     end
-    if type(player.getName) == "function" then
-        local n = player:getName()
-        if n and n ~= "" then return cleanName(n) end
-    end
-    if type(player.getRealCleanName) == "function" then
-        local n = player:getRealCleanName()
-        if n and n ~= "" then return cleanName(n) end
-    end
-    local uid = (type(player.getUserID) == "function" and player:getUserID()) or "0"
-    return "Player_" .. tostring(uid)
+    coroutine.wrap(function()
+        local body, status = http:post(url, JSON_HEADERS, tostring(payload or "{}"))
+        if status ~= 200 then
+            print("[SUPREME] HTTP POST status " .. tostring(status) .. ": " .. tostring(body))
+        end
+    end)()
 end
 
-local function getPort()
-    if type(getServerDefaultPort) == "function" then
-        local p = getServerDefaultPort()
-        if p and tonumber(p) and tonumber(p) > 0 then return tonumber(p) end
+local function asyncGet(url, callback)
+    if not http then
+        print("[SUPREME] http API tidak tersedia!")
+        return
     end
-    return DEFAULT_GTPS_PORT
+    coroutine.wrap(function()
+        local body, status = http:get(url, JSON_HEADERS)
+        if status == 200 and body and callback then
+            callback(tostring(body))
+        end
+    end)()
 end
 
-local function addStarterTheme(d)
+-- ============================================================
+-- WEBHOOK ke website casino
+-- ============================================================
+local function webhookDeposit(growid, currency, amount)
+    local payload = string.format(
+        '{"growId":"%s","currency":"%s","amount":%d,"secretKey":"%s"}',
+        jsonEscape(growid), jsonEscape(currency), math.floor(tonumber(amount) or 0), jsonEscape(SECRET_KEY)
+    )
+    asyncPost(WEB_API_URL .. "/gtps/deposit-webhook", payload)
+end
+
+local function webhookWithdraw(growid, currency, amount)
+    local payload = string.format(
+        '{"growId":"%s","currency":"%s","amount":%d,"secretKey":"%s"}',
+        jsonEscape(growid), jsonEscape(currency), math.floor(tonumber(amount) or 0), jsonEscape(SECRET_KEY)
+    )
+    asyncPost(WEB_API_URL .. "/gtps/withdraw-webhook", payload)
+end
+
+local function webhookLink(growid, code, username)
+    local payload = string.format(
+        '{"growid":"%s","code":"%s","username":"%s"}',
+        jsonEscape(growid), jsonEscape(code), jsonEscape(username)
+    )
+    asyncPost(WEB_API_URL .. "/gtps/link-growid", payload)
+end
+
+-- ============================================================
+-- PROSES KODE LINK (dipanggil saat player /link atau isi dialog)
+-- ============================================================
+local function checkAndApplyCode(player, code)
+    local growid = player:getName()
+    local cleanCode = string.gsub(tostring(code or ""), "%D", "") -- buang semua non-digit
+    if #cleanCode < 5 then
+        player:onConsoleMessage("`4[SUPREME] Masukkan kode 6 digit dari website casino!``")
+        return
+    end
+
+    asyncGet(WEB_API_URL .. "/gtps/check-link?code=" .. cleanCode, function(body)
+        -- Contoh respons server.js:
+        --   {"linked":true,"growId":"xxx","code":"123456","username":"budi"}
+        --   {"linked":false,"code":"123456"}
+        -- Username web dipakai kalau ada; kalau belum, fallback = kode.
+        local username = jsonStrField(body, "username")
+        if not username or username == "" then
+            username = cleanCode
+        end
+
+        -- Simpan link + pastikan akun ada
+        setLink(growid, username)
+        if getBalance(username) == 0 then
+            setBalance(username, 0)
+        end
+
+        -- Kabari website
+        webhookLink(growid, cleanCode, username)
+
+        player:onConsoleMessage("`2[SUPREME] Berhasil! GrowID `6" .. growid .. "`2 terhubung ke akun casino `6" .. username .. "`2!``")
+        player:onConsoleMessage("`2[SUPREME] Ketik `6/balance`2 cek saldo, `6/deposit 10 dl`2 deposit, `6/withdraw 5 dl`2 withdraw!``")
+    end)
+end
+
+-- ============================================================
+-- DIALOG: /casino
+-- ============================================================
+local function dlgTheme(d)
     table.insert(d, "set_bg_color|18,22,34,235|\n")
     table.insert(d, "set_border_color|214,168,73,255|\n")
-    table.insert(d, "set_custom_spacing|x:4;y:6|\n")
     table.insert(d, "set_default_color|`o\n")
 end
 
--- ============================================================
--- NATIVE GTPS STORAGE (loadStringFromServer / saveStringToServer)
--- ============================================================
-local function loadData()
-    if type(loadStringFromServer) ~= "function" then return end
-    
-    local raw = loadStringFromServer(DB_KEY)
-    if type(raw) == "string" and raw ~= "" and raw ~= "0" then
-        for line in raw:gmatch("[^\r\n]+") do
-            local user, bal = line:match("^([^:]+):([%d%.]+)$")
-            if user and bal then
-                accounts[cleanName(user)] = tonumber(bal) or 0
-            end
-        end
-    end
+local function showCasinoDialog(player)
+    local growid = player:getName()
+    local linkedUser = getLinkedUsername(growid)
+    local bal = linkedUser and getBalance(linkedUser) or 0
+    local siteUser = linkedUser or "(Belum linked)"
 
-    local rawLinks = loadStringFromServer(LINKS_KEY)
-    if type(rawLinks) == "string" and rawLinks ~= "" and rawLinks ~= "0" then
-        for line in rawLinks:gmatch("[^\r\n]+") do
-            local uid, siteUser = line:match("^(%d+):([^:]+)$")
-            if uid and siteUser then
-                playerLinks[tonumber(uid)] = cleanName(siteUser)
-            end
-        end
-    end
-end
+    local d = {}
+    dlgTheme(d)
+    table.insert(d, "add_label_with_icon|big|`6Supreme Casino Portal|left|14714|\n")
+    table.insert(d, "add_smalltext|`9GTPS Cloud In-Game Cashier|\n")
+    table.insert(d, "add_spacer|small|\n")
+    table.insert(d, "add_textbox|`wGrowID: `2" .. growid .. "|\n")
+    table.insert(d, "add_textbox|`wAkun Casino: `6" .. siteUser .. "|\n")
+    table.insert(d, "add_textbox|`wSaldo: `2" .. math.floor(bal) .. " DLS `o(`2" .. string.format("%.2f", bal / 100) .. " BGL`o)|\n")
+    table.insert(d, "add_spacer|small|\n")
+    table.insert(d, "add_textbox|`6Perintah:|\n")
+    table.insert(d, "add_smalltext|`w/deposit <jumlah> [wl|dl|bgl]|\n")
+    table.insert(d, "add_smalltext|`w/withdraw <jumlah> [wl|dl|bgl]|\n")
+    table.insert(d, "add_smalltext|`w/link <kode>  - Link akun web casino|\n")
+    table.insert(d, "add_smalltext|`w/balance      - Cek saldo|\n")
+    table.insert(d, "add_spacer|small|\n")
+    table.insert(d, "add_button|btn_link|`6Masukkan Kode Link|staticYellowFrame|0|0\n")
+    table.insert(d, "add_quick_exit|\n")
+    table.insert(d, "end_dialog|supreme_casino_menu|Tutup||\n")
 
-local function saveData()
-    if type(saveStringToServer) ~= "function" then return end
-    
-    local accLines = {}
-    for user, bal in pairs(accounts) do
-        table.insert(accLines, user .. ":" .. string.format("%.2f", bal))
-    end
-    saveStringToServer(DB_KEY, table.concat(accLines, "\n"))
-
-    local linkLines = {}
-    for uid, user in pairs(playerLinks) do
-        table.insert(linkLines, tostring(uid) .. ":" .. user)
-    end
-    saveStringToServer(LINKS_KEY, table.concat(linkLines, "\n"))
-    dirty = false
-end
-
-loadData()
-
-if type(onAutoSaveRequest) == "function" then
-    onAutoSaveRequest(function()
-        if dirty then saveData() end
-    end)
-end
-
--- Helper: Get linked casino account for a player
-local function getLinkedAccount(player)
-    local pName = getPlayerName(player)
-    local uid = (type(player.getUserID) == "function" and player:getUserID()) or 0
-
-    if uid > 0 and playerLinks[uid] then
-        local siteUser = playerLinks[uid]
-        return siteUser, accounts[siteUser] or 0
-    end
-
-    return pName, accounts[pName] or 0
-end
-
-local function setBalance(siteUser, newBal)
-    accounts[cleanName(siteUser)] = math.max(0, newBal)
-    dirty = true
-    saveData()
+    player:onDialogRequest(table.concat(d))
 end
 
 -- ============================================================
--- DIALOG: /link POPUP
+-- DIALOG: input kode link
 -- ============================================================
 local function showLinkDialog(player)
-    if not player or type(player.onDialogRequest) ~= "function" then return end
-    local pName = getPlayerName(player)
     local d = {}
-    addStarterTheme(d)
-    table.insert(d, "add_label_with_icon|big|`6Supreme Casino Account Linking|left|18|\n")
-    table.insert(d, "add_smalltext|`9Connect your GrowID character to your Supreme Casino account!|\n")
+    dlgTheme(d)
+    table.insert(d, "add_label_with_icon|big|`6Link Akun Casino|left|18|\n")
+    table.insert(d, "add_smalltext|`9Hubungkan GrowID kamu dengan akun web casino!|\n")
     table.insert(d, "add_spacer|small|\n")
-    table.insert(d, "add_textbox|`wCharacter GrowID: `2" .. esc(pName) .. "|\n")
-    table.insert(d, "add_textbox|`6Enter your 6-digit link code from your Web Cashier:|\n")
+    table.insert(d, "add_textbox|`wGrowID kamu: `2" .. player:getName() .. "|\n")
+    table.insert(d, "add_textbox|`6Masukkan kode 6 digit dari Web Casino -> Wallet -> Link GTPS:|\n")
     table.insert(d, "add_spacer|small|\n")
-    table.insert(d, "add_text_input|inp_link_code|6-Digit Code:||6|\n")
+    table.insert(d, "add_text_input|inp_link_code|Kode 6 Digit:||6|\n")
     table.insert(d, "add_spacer|small|\n")
     table.insert(d, "add_quick_exit|\n")
-    table.insert(d, "end_dialog|supreme_link_dialog|Cancel|Link Account|\n")
+    table.insert(d, "end_dialog|supreme_link_dialog|Batal|Link Sekarang|\n")
 
     player:onDialogRequest(table.concat(d))
 end
 
 -- ============================================================
--- DIALOG: /casino POPUP
+-- COMMAND PROCESSOR
 -- ============================================================
-local function showCasinoDialog(player)
-    if not player or type(player.onDialogRequest) ~= "function" then return end
-    local cleanGrowID = getPlayerName(player)
-    local siteUser, balDls = getLinkedAccount(player)
+local function handleCommand(player, cmd, arg)
+    local growid = player:getName()
+    arg = tostring(arg or "")
 
-    local d = {}
-    addStarterTheme(d)
-    table.insert(d, "add_label_with_icon|big|`6Supreme Casino Portal|left|14714|\n")
-    table.insert(d, "add_smalltext|`9GTPS In-Game Cashier Sync (Port: " .. getPort() .. ")|\n")
-    table.insert(d, "add_spacer|small|\n")
-    table.insert(d, "add_textbox|`wConnected GrowID: `2" .. esc(cleanGrowID) .. "|\n")
-    table.insert(d, "add_textbox|`wLinked Casino User: `6" .. esc(siteUser) .. "|\n")
-    table.insert(d, "add_textbox|`wCasino Balance: `2" .. commas(balDls) .. " DLS `o(`2" .. string.format("%.2f", balDls / 100) .. " BGL`o)|\n")
-    table.insert(d, "add_spacer|small|\n")
-    table.insert(d, "add_textbox|`6Quick Commands:|\n")
-    table.insert(d, "add_smalltext|`w/deposit <amount> [wl|dl|bgl] `o- Deposit locks to casino|\n")
-    table.insert(d, "add_smalltext|`w/withdraw <amount> [wl|dl|bgl] `o- Withdraw locks directly to backpack|\n")
-    table.insert(d, "add_smalltext|`w/link <code> `o- Link your web casino account|\n")
-    table.insert(d, "add_smalltext|`w/balance `o- View live casino balance|\n")
-    table.insert(d, "add_spacer|small|\n")
-    table.insert(d, "add_button|open_link_menu|`6Enter Link Code|staticYellowFrame|0|0\n")
-    table.insert(d, "add_quick_exit|\n")
-    table.insert(d, "end_dialog|supreme_casino_menu|Close||\n")
-
-    player:onDialogRequest(table.concat(d))
-end
-
-local websiteUsers = {}
-local pendingInGameLinks = {}
-
--- Preloaded standard verification codes
-websiteUsers["999999"] = { username = "admin99", code = "999999" }
-websiteUsers["123456"] = { username = "Mytegt", code = "123456" }
-websiteUsers["839201"] = { username = "Crowic", code = "839201" }
-
-local function registerWebUser(uname, code, linkedGrowId)
-    local c = tostring(code or ""):gsub("%s+", "")
-    if c == "" then return end
-    websiteUsers[c] = {
-        username = tostring(uname or "User"),
-        code = c,
-        linkedGrowId = (linkedGrowId and linkedGrowId ~= "" and linkedGrowId ~= "null" and linkedGrowId ~= "nil") and tostring(linkedGrowId) or nil
-    }
-end
-
--- ============================================================
--- ACCOUNT LINK HANDLER (Strict Verification - Rejects Fake Codes)
--- ============================================================
-local function handleLinkCode(player, code)
-    if not player or not code or code == "" then return end
-    code = tostring(code):gsub("%s+", "")
-    local cleanGrowID = getPlayerName(player)
-    local uid = (type(player.getUserID) == "function" and player:getUserID()) or 0
-
-    -- STRICT VERIFICATION: ONLY ALLOW REGISTERED WEBSITE CODES!
-    local matched = websiteUsers[code]
-    if not matched then
-        if type(player.onConsoleMessage) == "function" then
-            player:onConsoleMessage("`4[SUPREME] Invalid code! No casino account found with code: `6" .. code .. "``")
-            player:onConsoleMessage("`4[SUPREME] Please open your website profile -> Wallet -> 'Link GTPS' to get your REAL 6-digit code!``")
-        end
-        if type(player.playAudio) == "function" then player:playAudio("audio/bleep_fail.wav") end
-        return false
-    end
-
-    matched.linkedGrowId = cleanGrowID
-    if uid > 0 then
-        playerLinks[uid] = cleanGrowID
-    end
-    if not accounts[cleanGrowID] then accounts[cleanGrowID] = 0 end
-    table.insert(pendingInGameLinks, 1, {
-        growId = cleanGrowID,
-        code = code,
-        username = matched.username,
-        timestamp = os.time and os.time() or 0
-    })
-    while #pendingInGameLinks > 50 do
-        table.remove(pendingInGameLinks)
-    end
-    dirty = true
-    saveData()
-
-    if type(player.onConsoleMessage) == "function" then
-        player:onConsoleMessage("`2[SUPREME] Success! Linked character `6" .. cleanGrowID .. "`2 to website account: `e" .. matched.username .. "`2!``")
-    end
-    if type(player.onTalkBubble) == "function" and type(player.getNetID) == "function" then
-        player:onTalkBubble(player:getNetID(), "`2Linked to " .. matched.username .. "!``", 1)
-    end
-    if type(player.playAudio) == "function" then player:playAudio("cash_register.wav") end
-
-    -- Webhook to Node.js backend (safely checks for non-localhost URL)
-    local postPayload = string.format('{"growid":"%s","code":"%s","username":"%s"}', cleanGrowID, code, matched.username)
-    safeHttpPost(WEB_API_URL .. "/gtps/link-growid", postPayload)
-    return true
-end
-
--- ============================================================
--- CENTRAL COMMAND PROCESSOR (Universal Logic)
--- ============================================================
-local function processCasinoCommand(world, player, fullCommand)
-    if not player or not fullCommand then return false end
-    local rawText = tostring(fullCommand):gsub("^%s+", ""):gsub("%s+$", "")
-    if rawText == "" then return false end
-
-    -- Match command token with optional leading slash, dot, or exclamation
-    local cmdToken, arg = rawText:match("^[/!%.]?(%S+)%s*(.*)")
-    if not cmdToken then return false end
-    local cmdL = cmdToken:lower()
-    arg = arg or ""
-
-    local cleanGrowID = getPlayerName(player)
-
-    -- 1. /CASINO or /SUPREME
-    if cmdL == "casino" or cmdL == "supreme" then
+    -- /casino | /supreme
+    if cmd == "casino" or cmd == "supreme" then
         showCasinoDialog(player)
-        if type(player.playAudio) == "function" then player:playAudio("hub_open.wav") end
         return true
     end
 
-    -- 2. /CASINOHELP
-    if cmdL == "casinohelp" then
-        if type(player.onConsoleMessage) == "function" then
-            player:onConsoleMessage("`6========== [ SUPREME CASINO COMMANDS ] ==========``")
-            player:onConsoleMessage("`2/casino `w- Open Supreme Casino GUI panel``")
-            player:onConsoleMessage("`2/deposit <amount> [wl|dl|bgl] `w- Deposit locks into casino``")
-            player:onConsoleMessage("`2/withdraw <amount> [wl|dl|bgl] `w- Withdraw locks to backpack``")
-            player:onConsoleMessage("`2/link <code> `w- Link character with 6-digit web code``")
-            player:onConsoleMessage("`2/balance `w- Check live casino balance``")
-            player:onConsoleMessage("`6===============================================``")
-        end
+    -- /casinohelp
+    if cmd == "casinohelp" then
+        player:onConsoleMessage("`6===== [ SUPREME CASINO ] =====``")
+        player:onConsoleMessage("`2/casino `w- Buka panel casino``")
+        player:onConsoleMessage("`2/deposit <jml> [wl|dl|bgl] `w- Deposit ke casino``")
+        player:onConsoleMessage("`2/withdraw <jml> [wl|dl|bgl] `w- Withdraw ke backpack``")
+        player:onConsoleMessage("`2/link <kode> `w- Link akun web casino``")
+        player:onConsoleMessage("`2/balance `w- Cek saldo casino``")
+        player:onConsoleMessage("`6================================``")
         return true
     end
 
-    -- 3. /LINK [code]
-    if cmdL == "link" or cmdL == "setgrowid" then
-        local code = arg:match("(%d%d%d%d%d?%d?)")
-        if not code or code == "" then
+    -- /link [kode]
+    if cmd == "link" or cmd == "setgrowid" then
+        if arg == "" then
             showLinkDialog(player)
-            if type(player.playAudio) == "function" then player:playAudio("dry_tick.wav") end
+        else
+            checkAndApplyCode(player, arg)
+        end
+        return true
+    end
+
+    -- /balance | /bal
+    if cmd == "balance" or cmd == "bal" then
+        local linkedUser = getLinkedUsername(growid)
+        if not linkedUser then
+            player:onConsoleMessage("`4[SUPREME] Kamu belum link akun! Ketik `6/link <kode>`4 dulu.``")
             return true
         end
-        handleLinkCode(player, code)
+        local bal = getBalance(linkedUser)
+        player:onConsoleMessage("`2[SUPREME] GrowID: `6" .. growid ..
+            "` `w| Akun: `6" .. linkedUser ..
+            "` `w| Saldo: `2" .. math.floor(bal) ..
+            " DLS `w(`2" .. string.format("%.2f", bal / 100) .. " BGL`w)``")
         return true
     end
 
-    -- 4. /BALANCE or /BAL
-    if cmdL == "balance" or cmdL == "bal" then
-        local siteUser, balDls = getLinkedAccount(player)
-        if type(player.onConsoleMessage) == "function" then
-            player:onConsoleMessage("`2[SUPREME] `wGrowID: `6" .. cleanGrowID .. " `w| Casino User: `6" .. siteUser .. " `w| Balance: `2" .. commas(balDls) .. " DLS `w(`2" .. string.format("%.2f", balDls / 100) .. " BGL`w)``")
-        end
-        if type(player.playAudio) == "function" then player:playAudio("dry_tick.wav") end
-        
-        safeHttpGet(WEB_API_URL .. "/gtps/balance/" .. cleanGrowID)
-        return true
-    end
-
-    -- 5. /DEPOSIT <AMOUNT> [WL|DL|BGL]
-    if cmdL == "deposit" or cmdL == "dep" then
+    -- /deposit <amount> [wl|dl|bgl]
+    if cmd == "deposit" or cmd == "dep" then
         local amtStr, curStr = arg:match("^(%d+)%s*(%a*)$")
         local amt = tonumber(amtStr) or 0
-        curStr = (curStr or "dl"):lower()
+        curStr = string.lower(curStr or "")
         if curStr == "" then curStr = "dl" end
 
         if amt <= 0 then
-            if type(player.onConsoleMessage) == "function" then
-                player:onConsoleMessage("`4[SUPREME] `wUsage: `6/deposit <amount> [wl|dl|bgl]`` (Example: `6/deposit 50 dl`w or `6/deposit 1 bgl`w)``")
-            end
+            player:onConsoleMessage("`4[SUPREME] Contoh: `6/deposit 50 dl`4 atau `6/deposit 1 bgl``")
             return true
         end
 
-        local itemId = ITEM_DL
-        local currencyName = "DL"
-        local dlsValue = amt
-
-        if curStr == "bgl" then
-            itemId = ITEM_BGL
-            currencyName = "BGL"
-            dlsValue = amt * 100
-        elseif curStr == "wl" then
-            itemId = ITEM_WL
-            currencyName = "WL"
-            dlsValue = amt / 100
+        local linkedUser = getLinkedUsername(growid)
+        if not linkedUser then
+            player:onConsoleMessage("`4[SUPREME] Kamu belum link akun casino! Ketik `6/link <kode>``")
+            return true
         end
 
-        local currentInInv = (type(player.getItemAmount) == "function" and player:getItemAmount(itemId)) or 0
+        local itemId, currencyName, dlsValue
+        if curStr == "bgl" then
+            itemId = ITEM_BGL; currencyName = "BGL"; dlsValue = amt * 100
+        elseif curStr == "wl" then
+            itemId = ITEM_WL;  currencyName = "WL";  dlsValue = amt / 100
+        else
+            itemId = ITEM_DL;  currencyName = "DL";  dlsValue = amt
+        end
+
+        local currentInInv = player:getItemAmount(itemId) or 0
         if currentInInv < amt then
-            if type(player.onConsoleMessage) == "function" then
-                player:onConsoleMessage("`4[SUPREME] `wYou do not have enough " .. currencyName .. "! Short by `4" .. commas(amt - currentInInv) .. " " .. currencyName .. "`` (You have: " .. commas(currentInInv) .. ")")
-            end
-            if type(player.playAudio) == "function" then player:playAudio("audio/bleep_fail.wav") end
+            player:onConsoleMessage("`4[SUPREME] Item tidak cukup! Kamu punya " .. currentInInv ..
+                " " .. currencyName .. ", butuh " .. amt .. "``")
             return true
         end
 
-        -- Deduct from player backpack
-        if type(player.changeItem) == "function" then
-            player:changeItem(itemId, -amt, 0)
+        -- Ambil item dari inventory (API: changeItem(id, count, addBackpack))
+        if not player:changeItem(itemId, -amt, 0) then
+            player:onConsoleMessage("`4[SUPREME] Gagal mengambil item dari inventory!``")
+            return true
         end
 
-        local siteUser, currentBal = getLinkedAccount(player)
-        local newBal = currentBal + dlsValue
-        setBalance(siteUser, newBal)
+        local newBal = getBalance(linkedUser) + dlsValue
+        setBalance(linkedUser, newBal)
 
-        if type(player.onConsoleMessage) == "function" then
-            player:onConsoleMessage("`2[SUPREME] `wSuccessfully deposited `2" .. commas(amt) .. " " .. currencyName .. "`w! New balance: `6" .. commas(newBal) .. " DLS``")
-        end
-        if type(player.onTalkBubble) == "function" and type(player.getNetID) == "function" then
-            player:onTalkBubble(player:getNetID(), "`2Deposited `6" .. commas(amt) .. " " .. currencyName .. "`2 to Supreme Casino!``", 1)
-        end
-        if type(player.playAudio) == "function" then player:playAudio("cash_register.wav") end
+        player:onConsoleMessage("`2[SUPREME] Berhasil deposit `2" .. amt .. " " .. currencyName ..
+            "`2! Saldo baru: `6" .. math.floor(newBal) .. " DLS``")
 
-        -- Webhook sync to Node.js server
-        local payload = string.format('{"growId":"%s","currency":"%s","amount":%d,"secretKey":"%s"}', cleanGrowID, currencyName, amt, SECRET_KEY)
-        safeHttpPost(WEB_API_URL .. "/gtps/deposit-webhook", payload)
+        webhookDeposit(growid, currencyName, amt)
         return true
     end
 
-    -- 6. /WITHDRAW <AMOUNT> [WL|DL|BGL]
-    if cmdL == "withdraw" or cmdL == "wd" or cmdL == "with" then
+    -- /withdraw <amount> [wl|dl|bgl]
+    if cmd == "withdraw" or cmd == "wd" or cmd == "with" then
         local amtStr, curStr = arg:match("^(%d+)%s*(%a*)$")
         local amt = tonumber(amtStr) or 0
-        curStr = (curStr or "dl"):lower()
+        curStr = string.lower(curStr or "")
         if curStr == "" then curStr = "dl" end
 
         if amt <= 0 then
-            if type(player.onConsoleMessage) == "function" then
-                player:onConsoleMessage("`4[SUPREME] `wUsage: `6/withdraw <amount> [wl|dl|bgl]`` (Example: `6/withdraw 10 dl`w or `6/withdraw 1 bgl`w)``")
-            end
+            player:onConsoleMessage("`4[SUPREME] Contoh: `6/withdraw 10 dl`4 atau `6/withdraw 1 bgl``")
             return true
         end
 
-        local itemId = ITEM_DL
-        local currencyName = "DL"
-        local dlsCost = amt
+        local linkedUser = getLinkedUsername(growid)
+        if not linkedUser then
+            player:onConsoleMessage("`4[SUPREME] Kamu belum link akun casino! Ketik `6/link <kode>``")
+            return true
+        end
 
+        local itemId, currencyName, dlsCost
         if curStr == "bgl" then
-            itemId = ITEM_BGL
-            currencyName = "BGL"
-            dlsCost = amt * 100
+            itemId = ITEM_BGL; currencyName = "BGL"; dlsCost = amt * 100
         elseif curStr == "wl" then
-            itemId = ITEM_WL
-            currencyName = "WL"
-            dlsCost = amt / 100
+            itemId = ITEM_WL;  currencyName = "WL";  dlsCost = amt / 100
+        else
+            itemId = ITEM_DL;  currencyName = "DL";  dlsCost = amt
         end
 
-        local siteUser, currentBal = getLinkedAccount(player)
-        if currentBal < dlsCost then
-            if type(player.onConsoleMessage) == "function" then
-                player:onConsoleMessage("`4[SUPREME] `wInsufficient balance! You have `4" .. commas(currentBal) .. " DLS`w. Needed: `4" .. commas(dlsCost) .. " DLS``")
-            end
-            if type(player.playAudio) == "function" then player:playAudio("audio/bleep_fail.wav") end
+        local currentBal = getBalance(linkedUser)
+        if currentBal + 1e-9 < dlsCost then
+            player:onConsoleMessage("`4[SUPREME] Saldo tidak cukup! Saldo: `4" .. math.floor(currentBal) ..
+                " DLS`4, butuh: `4" .. math.floor(dlsCost) .. " DLS``")
             return true
         end
 
-        -- Deduct from casino balance
-        setBalance(siteUser, currentBal - dlsCost)
-
-        -- Deliver items directly into backpack
-        if type(player.changeItem) == "function" then
-            if not player:changeItem(itemId, amt, 0) then
-                player:changeItem(itemId, amt, 1)
-            end
-        end
-
-        if type(player.onConsoleMessage) == "function" then
-            player:onConsoleMessage("`2[SUPREME] `wSuccessfully withdrew `2" .. commas(amt) .. " " .. currencyName .. "`w! Delivered to backpack. Remaining: `6" .. commas(currentBal - dlsCost) .. " DLS``")
-        end
-        if type(player.onTalkBubble) == "function" and type(player.getNetID) == "function" then
-            player:onTalkBubble(player:getNetID(), "`2Withdrew `6" .. commas(amt) .. " " .. currencyName .. "`2 from Supreme Casino!``", 1)
-        end
-        if type(player.playAudio) == "function" then player:playAudio("cash_register.wav") end
-
-        -- Webhook sync
-        local payload = string.format('{"growId":"%s","currency":"%s","amount":%d,"secretKey":"%s"}', cleanGrowID, currencyName, amt, SECRET_KEY)
-        safeHttpPost(WEB_API_URL .. "/gtps/withdraw-webhook", payload)
-        return true
-    end
-
-    -- 7. DEVELOPER COMMANDS (Role 51)
-    if cmdL == "casinoaddbal" then
-        local isDev = (type(player.hasRole) == "function" and player:hasRole(DEV_ROLE)) or (type(player.getRole) == "function" and player:getRole() >= DEV_ROLE)
-        if not isDev then
-            if type(player.onConsoleMessage) == "function" then player:onConsoleMessage("`4[SUPREME] No permission.") end
+        -- Cek ruang backpack dulu (API: canFit({ {id, count} }))
+        if player.canFit and not player:canFit({ { id = itemId, count = amt } }) then
+            player:onConsoleMessage("`4[SUPREME] Backpack penuh! Kosongkan slot dulu.``")
             return true
         end
-        local targetUser, amtStr = arg:match("^(%S+)%s*(%d+)$")
-        local amt = tonumber(amtStr) or 0
-        if not targetUser or amt <= 0 then
-            if type(player.onConsoleMessage) == "function" then player:onConsoleMessage("`4[SUPREME] Usage: /casinoaddbal <growid> <amount_in_dls>") end
-            return true
-        end
-        local cUser = cleanName(targetUser)
-        local cur = accounts[cUser] or 0
-        setBalance(cUser, cur + amt)
-        if type(player.onConsoleMessage) == "function" then
-            player:onConsoleMessage("`2[SUPREME] Added `6" .. commas(amt) .. " DLS`2 to `w" .. cUser .. "`2! New balance: `6" .. commas(cur + amt) .. " DLS``")
-        end
-        return true
-    end
 
-    if cmdL == "casinorembal" then
-        local isDev = (type(player.hasRole) == "function" and player:hasRole(DEV_ROLE)) or (type(player.getRole) == "function" and player:getRole() >= DEV_ROLE)
-        if not isDev then
-            if type(player.onConsoleMessage) == "function" then player:onConsoleMessage("`4[SUPREME] No permission.") end
+        -- Beri item ke player
+        local given = player:changeItem(itemId, amt, 0)
+        if not given then
+            given = player:changeItem(itemId, amt, 1)
+        end
+        if not given then
+            player:onConsoleMessage("`4[SUPREME] Gagal memberi item! Saldo tidak dipotong.``")
             return true
         end
-        local targetUser, amtStr = arg:match("^(%S+)%s*(%d+)$")
-        local amt = tonumber(amtStr) or 0
-        if not targetUser or amt <= 0 then
-            if type(player.onConsoleMessage) == "function" then player:onConsoleMessage("`4[SUPREME] Usage: /casinorembal <growid> <amount_in_dls>") end
-            return true
-        end
-        local cUser = cleanName(targetUser)
-        local cur = accounts[cUser] or 0
-        local newB = math.max(0, cur - amt)
-        setBalance(cUser, newB)
-        if type(player.onConsoleMessage) == "function" then
-            player:onConsoleMessage("`4[SUPREME] Removed `6" .. commas(amt) .. " DLS`4 from `w" .. cUser .. "`4! New balance: `6" .. commas(newB) .. " DLS``")
-        end
+
+        setBalance(linkedUser, currentBal - dlsCost)
+
+        player:onConsoleMessage("`2[SUPREME] Berhasil withdraw `2" .. amt .. " " .. currencyName ..
+            "`2! Sudah masuk backpack. Sisa: `6" .. math.floor(currentBal - dlsCost) .. " DLS``")
+
+        webhookWithdraw(growid, currencyName, amt)
         return true
     end
 
@@ -536,228 +425,51 @@ local function processCasinoCommand(world, player, fullCommand)
 end
 
 -- ============================================================
--- SAFE UNIVERSAL ARGUMENT RESOLVER
--- ============================================================
-local function resolvePlayerAndCommand(a1, a2, a3)
-    local targetWorld = nil
-    local targetPlayer = nil
-    local commandText = nil
-
-    if (type(a1) == "userdata" or type(a1) == "table") and (type(a1.getCleanName) == "function" or type(a1.getUserID) == "function" or type(a1.onConsoleMessage) == "function") then
-        targetPlayer = a1
-        commandText = a2
-    elseif (type(a2) == "userdata" or type(a2) == "table") and (type(a2.getCleanName) == "function" or type(a2.getUserID) == "function" or type(a2.onConsoleMessage) == "function") then
-        targetWorld = a1
-        targetPlayer = a2
-        commandText = a3
-    elseif type(a1) == "userdata" and type(a2) == "string" then
-        targetPlayer = a1
-        commandText = a2
-    elseif type(a2) == "userdata" and type(a3) == "string" then
-        targetWorld = a1
-        targetPlayer = a2
-        commandText = a3
-    end
-
-    if type(commandText) ~= "string" then
-        if type(a2) == "string" then commandText = a2
-        elseif type(a3) == "string" then commandText = a3
-        elseif type(a1) == "string" then commandText = a1 end
-    end
-
-    return targetWorld, targetPlayer, tostring(commandText or "")
-end
-
--- ============================================================
--- COMMAND REGISTRATION (Exact native format: NO pcall)
--- ============================================================
-local function registerCmd(cmdName, desc)
-    if type(registerLuaCommand) == "function" then
-        registerLuaCommand({
-            command = cmdName,
-            roleRequired = 1,
-            role = 1,
-            description = desc or ("Supreme Casino: /" .. cmdName)
-        })
-    end
-end
-
-local function registerDevCmd(cmdName, desc)
-    if type(registerLuaCommand) == "function" then
-        registerLuaCommand({
-            command = cmdName,
-            roleRequired = DEV_ROLE,
-            role = DEV_ROLE,
-            description = desc or ("Supreme Casino Dev: /" .. cmdName)
-        })
-    end
-end
-
-registerCmd("deposit", "Deposit locks to Supreme Casino: /deposit <amount> [wl|dl|bgl]")
-registerCmd("dep", "Deposit locks: /dep <amount> [wl|dl|bgl]")
-registerCmd("withdraw", "Withdraw locks from Supreme Casino: /withdraw <amount> [wl|dl|bgl]")
-registerCmd("wd", "Withdraw locks: /wd <amount> [wl|dl|bgl]")
-registerCmd("with", "Withdraw locks: /with <amount> [wl|dl|bgl]")
-registerCmd("link", "Link character with Supreme Casino: /link <code>")
-registerCmd("balance", "Check Supreme Casino balance: /balance")
-registerCmd("bal", "Check Supreme Casino balance: /bal")
-registerCmd("casino", "Open Supreme Casino panel: /casino")
-registerCmd("supreme", "Open Supreme Casino panel: /supreme")
-registerCmd("casinohelp", "Supreme Casino help: /casinohelp")
-
--- Dev commands (Role 51)
-registerDevCmd("casinoaddbal", "Add player balance: /casinoaddbal <growid> <amount>")
-registerDevCmd("casinorembal", "Remove player balance: /casinorembal <growid> <amount>")
-
--- ============================================================
--- HOOK 1: onPlayerCommandCallback
+-- CALLBACK: onPlayerCommandCallback
+-- Signature gtps.cloud: (world, player, fullCommand)
+-- fullCommand = string penuh, contoh "deposit 50 dl" -> parse sendiri
 -- ============================================================
 if type(onPlayerCommandCallback) == "function" then
-    onPlayerCommandCallback(function(a1, a2, a3)
-        local world, player, cmd = resolvePlayerAndCommand(a1, a2, a3)
-        if player and cmd and cmd ~= "" then
-            local handled = processCasinoCommand(world, player, cmd)
-            if handled then return true end
-        end
-        return false
+    onPlayerCommandCallback(function(world, player, fullCommand)
+        if type(fullCommand) ~= "string" then return false end
+        local cmd, arg = fullCommand:match("^(%S+)%s*(.*)")
+        if not cmd then return false end
+        cmd = cmd:lower():gsub("^/", "")
+        return handleCommand(player, cmd, arg or "")
     end)
 end
 
 -- ============================================================
--- HOOK 2: onPlayerChatCallback (Catches command BEFORE C++ says Unknown Command)
--- ============================================================
-if type(onPlayerChatCallback) == "function" then
-    onPlayerChatCallback(function(a1, a2, a3)
-        local world, player, msg = resolvePlayerAndCommand(a1, a2, a3)
-        if player and msg and msg ~= "" then
-            local firstChar = msg:sub(1, 1)
-            if firstChar == "/" or firstChar == "!" or firstChar == "." then
-                local handled = processCasinoCommand(world, player, msg)
-                if handled then return true end
-            end
-        end
-        return false
-    end)
-end
-
--- ============================================================
--- HOOK 3: onPlayerActionCallback (Action packets: text|/deposit ...)
--- ============================================================
-if type(onPlayerActionCallback) == "function" then
-    onPlayerActionCallback(function(world, player, action)
-        if not player or type(action) ~= "string" then return false end
-        local text = action:match("action|input.-\n|text|([^\r\n]+)") or action:match("text|([^\r\n]+)")
-        if text then
-            local firstChar = text:sub(1, 1)
-            if firstChar == "/" or firstChar == "!" or firstChar == "." then
-                local handled = processCasinoCommand(world, player, text)
-                if handled then return true end
-            end
-        end
-        return false
-    end)
-end
-
--- ============================================================
--- DIALOG PROCESSOR (Handles All GTPS Signature Formats)
--- ============================================================
-local function handleCasinoDialog(player, dName, dataTable)
-    if not player then return false end
-
-    local actualName = tostring(dName or "")
-    local data = {}
-
-    if type(dataTable) == "table" then
-        for k, v in pairs(dataTable) do
-            data[tostring(k)] = tostring(v)
-        end
-        if actualName == "" or actualName == "nil" then
-            actualName = tostring(dataTable.dialog_name or dataTable["dialog_name"] or "")
-        end
-    elseif type(dataTable) == "string" then
-        for k, v in dataTable:gmatch("([^\r\n|]+)|([^\r\n|]*)") do
-            data[k] = v
-        end
-        if actualName == "" or actualName == "nil" then
-            actualName = dataTable:match("dialog_name|([^\r\n|]+)") or ""
-        end
-    end
-
-    if actualName == "" and type(dName) == "string" and dName:find("dialog_name|") then
-        actualName = dName:match("dialog_name|([^\r\n|]+)") or ""
-        for k, v in dName:gmatch("([^\r\n|]+)|([^\r\n|]*)") do
-            data[k] = v
-        end
-    end
-
-    -- 1. LINK DIALOG
-    if actualName == "supreme_link_dialog" or actualName:find("supreme_link") then
-        local btn = tostring(data.buttonClicked or "")
-        if btn == "Cancel" or btn == "close_link" then return true end
-
-        local code = data.inp_link_code or data["inp_link_code"] or ""
-        code = string.gsub(tostring(code), "%s+", "")
-
-        if code ~= "" then
-            handleLinkCode(player, code)
-            return true
-        else
-            if type(player.onConsoleMessage) == "function" then
-                player:onConsoleMessage("`4[SUPREME] Please enter your 6-digit link code!``")
-            end
-            return true
-        end
-    end
-
-    -- 2. CASINO MENU DIALOG
-    if actualName == "supreme_casino_menu" or actualName:find("supreme_casino") then
-        local btn = tostring(data.buttonClicked or "")
-        if btn == "Close" or btn == "close_casino" then return true end
-
-        if btn == "open_link_menu" then
-            showLinkDialog(player)
-            return true
-        end
-
-        return true
-    end
-
-    return false
-end
-
--- ============================================================
--- HOOK 4: onPlayerDialogCallback (Multi-Signature Dispatcher)
+-- CALLBACK: onPlayerDialogCallback
+-- Signature gtps.cloud: (world, player, data)
+-- data.dialog_name = nama setelah end_dialog|
+-- data.buttonClicked = tombol; nilai text_input = data.<nama_field>
 -- ============================================================
 if type(onPlayerDialogCallback) == "function" then
-    onPlayerDialogCallback(function(arg1, arg2, arg3)
-        -- Format A: (player, dialogName, dataTable)
-        if type(arg1) == "userdata" and type(arg2) == "string" then
-            local handled = handleCasinoDialog(arg1, arg2, arg3)
-            if handled then return true end
+    onPlayerDialogCallback(function(world, player, data)
+        if type(data) ~= "table" then return false end
+        local dName = tostring(data.dialog_name or "")
+        local btn   = tostring(data.buttonClicked or "")
+
+        -- Dialog: input kode link
+        if dName == "supreme_link_dialog" then
+            if btn == "Batal" then return true end
+            local code = tostring(data.inp_link_code or "")
+            code = string.gsub(code, "%s+", "")
+            if code ~= "" then
+                checkAndApplyCode(player, code)
+            else
+                player:onConsoleMessage("`4[SUPREME] Kode tidak boleh kosong!``")
+            end
+            return true
         end
 
-        -- Format B: (world, player, dataTable)
-        if type(arg1) == "userdata" and type(arg2) == "userdata" then
-            local dName = ""
-            if type(arg3) == "table" then
-                dName = tostring(arg3.dialog_name or arg3["dialog_name"] or "")
-            elseif type(arg3) == "string" then
-                dName = tostring(arg3:match("dialog_name|([^\r\n|]+)") or "")
+        -- Dialog: menu casino
+        if dName == "supreme_casino_menu" then
+            if btn == "btn_link" then
+                showLinkDialog(player)
             end
-            local handled = handleCasinoDialog(arg2, dName, arg3)
-            if handled then return true end
-        end
-
-        -- Format C: (player, dataTable)
-        if type(arg1) == "userdata" then
-            local dName = ""
-            if type(arg2) == "table" then
-                dName = tostring(arg2.dialog_name or arg2["dialog_name"] or "")
-            elseif type(arg2) == "string" then
-                dName = tostring(arg2:match("dialog_name|([^\r\n|]+)") or "")
-            end
-            local handled = handleCasinoDialog(arg1, dName, arg2)
-            if handled then return true end
+            return true
         end
 
         return false
@@ -765,95 +477,131 @@ if type(onPlayerDialogCallback) == "function" then
 end
 
 -- ============================================================
--- HOOK 5: onPlayerPacketCallback (Direct Dialog Packet Interceptor)
+-- REGISTER COMMANDS (API gtps.cloud: registerLuaCommand)
+-- roleRequired 0 = semua player boleh pakai
 -- ============================================================
-if type(onPlayerPacketCallback) == "function" then
-    onPlayerPacketCallback(function(arg1, arg2, arg3)
-        local player = nil
-        local packet = nil
-        if type(arg1) == "userdata" and type(arg2) == "string" then
-            player = arg1; packet = arg2
-        elseif type(arg2) == "userdata" and type(arg3) == "string" then
-            player = arg2; packet = arg3
-        elseif type(arg1) == "string" then
-            packet = arg1
-        end
+if type(registerLuaCommand) == "function" then
+    local function reg(name, desc)
+        registerLuaCommand({ command = name, roleRequired = 0, description = desc })
+    end
+    reg("casino",     "Buka panel Supreme Casino")
+    reg("supreme",    "Buka panel Supreme Casino")
+    reg("casinohelp", "Bantuan perintah Supreme Casino")
+    reg("deposit",    "Deposit ke casino: /deposit <jml> [wl|dl|bgl]")
+    reg("dep",        "Alias /deposit")
+    reg("withdraw",   "Withdraw dari casino: /withdraw <jml> [wl|dl|bgl]")
+    reg("wd",         "Alias /withdraw")
+    reg("with",       "Alias /withdraw")
+    reg("link",       "Link akun web casino: /link <kode 6 digit>")
+    reg("balance",    "Cek saldo casino")
+    reg("bal",        "Alias /balance")
+else
+    print("[SUPREME] registerLuaCommand tidak tersedia - command tetap jalan via callback")
+end
 
-        if type(packet) == "string" and packet:find("dialog_name|supreme_link_dialog") then
-            local code = packet:match("inp_link_code|([^\r\n|]+)") or ""
-            code = string.gsub(tostring(code), "%s+", "")
-            if player and code ~= "" then
-                handleLinkCode(player, code)
-                return true
-            end
-        end
 -- ============================================================
--- HOOK 6: onHTTPRequest / onHttpRequest (Inbound Website Sync on Port 25741)
+-- BRIDGE: WEB -> GTPS (onHTTPRequest)
+-- Dipanggil dari web via: https://api.gtps.cloud/g-api/{port}/supreme/...
+-- PENTING: bridge ini TIDAK pakai auth dashboard gtps.cloud - siapa
+-- pun yang tahu URL bisa menembak. Karena itu SEMUA endpoint yang
+-- bisa mengubah data WAJIB memvalidasi secretKey (jangan hapus!).
 -- ============================================================
-local function handleHTTPRequest(req)
-    if not req then
-        return {
-            status = 200,
-            body = '{"status":"ONLINE","message":"Supreme Casino Gateway Ready"}',
-            headers = { ["Content-Type"] = "application/json" }
-        }
-    end
+local SERVER_PORT = 18876 -- fallback, dioverwrite di bawah
+if type(getServerDefaultPort) == "function" then
+    SERVER_PORT = getServerDefaultPort() or SERVER_PORT
+end
 
-    local method  = string.upper(tostring(req.method or "GET"))
-    local rawPath = string.lower(tostring(req.path or "/"))
-    rawPath = string.gsub(rawPath, "%?.*$", "")
-    rawPath = string.gsub(rawPath, "/+$", "")
-    if rawPath == "" then rawPath = "/" end
-
-    if method == "OPTIONS" then
-        return {
-            status = 200,
-            body = "OK",
-            headers = {
-                ["Content-Type"] = "text/plain",
-                ["Access-Control-Allow-Origin"] = "*",
-                ["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS",
-                ["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-            }
-        }
-    end
-
-    local body = tostring(req.body or "")
-    if body ~= "" and body:find("users") then
-        for uname, ucode, ugrowid in body:gmatch('"username"%s*:%s*"([^"]+)"%s*,%s*"code"%s*:%s*"([^"]+)"%s*,?%s*"?l?i?n?k?e?d?G?r?o?w?I?d?"?%s*:?%s*"?([^",}]*)"?') do
-            registerWebUser(uname, ucode, ugrowid)
-        end
-    end
-
-    -- Return JSON state to website
-    local linkParts = {}
-    for _, l in ipairs(pendingInGameLinks) do
-        table.insert(linkParts, string.format('{"growId":"%s","code":"%s","username":"%s"}', l.growId or "", l.code or "", l.username or ""))
-    end
-
-    local userParts = {}
-    for code, u in pairs(websiteUsers) do
-        table.insert(userParts, string.format('"%s":{"username":"%s","code":"%s","linkedGrowId":%s}', code, u.username, u.code, u.linkedGrowId and ('"' .. u.linkedGrowId .. '"') or "null"))
-    end
-
-    local jsonStr = string.format('{"success":true,"status":"ONLINE","port":%d,"pendingLinks":[%s],"websiteUsers":{%s}}', getPort(), table.concat(linkParts, ","), table.concat(userParts, ","))
-
+local function jsonResponse(status, body)
     return {
-        status = 200,
-        body = jsonStr,
-        headers = {
-            ["Content-Type"] = "application/json",
-            ["Access-Control-Allow-Origin"] = "*",
-            ["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS",
-            ["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-        }
+        status = status,
+        body = body,
+        headers = { ["Content-Type"] = "application/json" }
     }
 end
 
 if type(onHTTPRequest) == "function" then
-    onHTTPRequest(handleHTTPRequest)
-elseif type(onHttpRequest) == "function" then
-    onHttpRequest(handleHTTPRequest)
+    onHTTPRequest(function(req)
+        local method = string.lower(tostring(req.method or ""))
+        local path = tostring(req.path or "")
+
+        -- Health check: GET /supreme/ping
+        if method == "get" and path == "/supreme/ping" then
+            return jsonResponse(200, '{"ok":true,"script":"supreme_sync","port":' ..
+                tostring(SERVER_PORT) .. '}')
+        end
+
+        -- Withdraw dari website: POST /supreme/withdraw
+        -- Body: {"secretKey":"...","growId":"budi","currency":"DL","amount":10}
+        if method == "post" and path == "/supreme/withdraw" then
+            local body = tostring(req.body or "")
+
+            if jsonStrField(body, "secretKey") ~= SECRET_KEY then
+                return jsonResponse(403, '{"ok":false,"error":"invalid_secret_key"}')
+            end
+
+            local growId   = jsonStrField(body, "growId") or ""
+            local currency = string.upper(jsonStrField(body, "currency") or "DL")
+            local amount   = jsonNumField(body, "amount") or 0
+            if growId == "" or amount <= 0 then
+                return jsonResponse(400, '{"ok":false,"error":"growId_dan_amount_wajib"}')
+            end
+
+            local itemId, dlsCost
+            if currency == "BGL" then
+                itemId = ITEM_BGL; dlsCost = amount * 100
+            elseif currency == "WL" then
+                itemId = ITEM_WL;  dlsCost = amount / 100
+            else
+                currency = "DL"; itemId = ITEM_DL; dlsCost = amount
+            end
+
+            -- Pemain harus online
+            local targets = getPlayerByName(growId)
+            local target = type(targets) == "table" and targets[1] or nil
+            if not target then
+                return jsonResponse(404, '{"ok":false,"error":"player_offline"}')
+            end
+
+            -- Cek ledger (satu ledger dengan /withdraw in-game,
+            -- supaya tidak bisa double-spend dari dua sisi)
+            local linkedUser = getLinkedUsername(growId)
+            if not linkedUser then
+                return jsonResponse(404, '{"ok":false,"error":"growid_belum_link"}')
+            end
+            local bal = getBalance(linkedUser)
+            if bal + 1e-9 < dlsCost then
+                return jsonResponse(409, '{"ok":false,"error":"saldo_ledger_tidak_cukup"}')
+            end
+
+            -- Pastikan backpack muat dulu SEBELUM potong saldo
+            if target.canFit and not target:canFit({ { id = itemId, count = amount } }) then
+                return jsonResponse(409, '{"ok":false,"error":"backpack_penuh"}')
+            end
+
+            local given = target:changeItem(itemId, amount, 0)
+            if not given then
+                given = target:changeItem(itemId, amount, 1)
+            end
+            if not given then
+                return jsonResponse(500, '{"ok":false,"error":"gagal_beri_item"}')
+            end
+
+            -- Ledger dipotong setelah item pasti tertanam
+            setBalance(linkedUser, bal - dlsCost)
+
+            target:onConsoleMessage("`2[SUPREME] Withdraw dari website: `2" .. amount .. " " ..
+                currency .. "`2 masuk backpack! Sisa saldo: `6" .. math.floor(bal - dlsCost) .. " DLS``")
+
+            return jsonResponse(200, '{"ok":true,"delivered":' .. amount ..
+                ',"currency":"' .. currency .. '","growId":"' .. jsonEscape(growId) .. '"}')
+        end
+
+        return jsonResponse(404, '{"ok":false,"error":"not_found"}')
+    end)
+    print("[SUPREME] Bridge aktif: https://api.gtps.cloud/g-api/" .. tostring(SERVER_PORT) .. "/supreme/ping")
+else
+    print("[SUPREME] onHTTPRequest tidak tersedia di server ini!")
 end
 
-print("[SUPREME CASINO] Universal GTPS Sync Engine Loaded on Port " .. getPort() .. "!")
+print("[SUPREME CASINO] Script loaded! Siap digunakan di gtps.cloud")
+print("[SUPREME CASINO] Website API: " .. WEB_API_URL)

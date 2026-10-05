@@ -35,31 +35,24 @@ const liveBetsHistory = [];
 const activeBattles = [];
 
 let gtpsConfig = {
-  port: 25741,
   secretKey: 'supreme_gtps_secret_auth_token_25741',
   status: 'online',
   activeSyncCount: 0,
 };
 
-// GTPS API Endpoints (Synced with GTPS Server on Port 25741)
+// GTPS API Endpoints
 app.get('/api/gtps/status', (req, res) => {
   res.json({
     status: gtpsConfig.status,
-    port: gtpsConfig.port,
     syncCount: gtpsConfig.activeSyncCount,
   });
 });
 
-app.post('/api/gtps/config', (req, res) => {
-  const { port } = req.body;
-  if (port && Number(port) > 0) {
-    gtpsConfig.port = Number(port);
-  }
-  res.json({ success: true, port: gtpsConfig.port });
-});
-
 app.post('/api/gtps/deposit-webhook', (req, res) => {
   const { growId, currency, amount, secretKey } = req.body;
+  if (secretKey !== gtpsConfig.secretKey) {
+    return res.status(403).json({ error: 'Invalid secret key' });
+  }
   console.log(`[GTPS Deposit] Received ${amount} ${currency} from ${growId}`);
   gtpsConfig.activeSyncCount++;
 
@@ -79,6 +72,9 @@ app.post('/api/gtps/deposit-webhook', (req, res) => {
 
 app.post('/api/gtps/withdraw-webhook', (req, res) => {
   const { growId, currency, amount, secretKey } = req.body;
+  if (secretKey !== gtpsConfig.secretKey) {
+    return res.status(403).json({ error: 'Invalid secret key' });
+  }
   console.log(`[GTPS Withdraw] Requested ${amount} ${currency} for ${growId}`);
   gtpsConfig.activeSyncCount++;
 
