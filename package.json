@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server.js",
-    "test": "node --test tests/game-authority.test.mjs"
+    "test": "node --test tests/game-authority.test.mjs",
+    "mongo:init": "node scripts/mongo-init.mjs",
+    "mongo:migrate": "node scripts/mongo-migrate-json.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -17,7 +19,8 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tailwind-merge": "^3.0.2",
-    "ws": "^8.22.0"
+    "ws": "^8.22.0",
+    "mongodb": "^7.7.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
