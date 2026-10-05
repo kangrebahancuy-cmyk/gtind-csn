@@ -4,7 +4,7 @@ import { sound } from '../utils/audio';
 
 export interface StoredAccount {
   username: string;
-  password: string;
+  password?: string;
   growId?: string;
   gtpsLinked?: boolean;
   balanceDls: number;
@@ -369,7 +369,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const currencyLabel = activeCurrency === 'BGLS' ? 'BGL' : 'DLS';
   const currencyIcon = activeCurrency === 'BGLS' ? '/assets/BGLS.png' : '/assets/DLS.png';
-  const isAdmin = currentUser?.username.toLowerCase() === 'admin99' || Boolean(currentUser?.isAdmin);
+  const isAdmin = Boolean(currentUser?.isAdmin);
 
   const user: UserState = {
     username: currentUser ? currentUser.username : 'Guest',
@@ -769,8 +769,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { success: false, message: 'Server casino tidak merespons. Coba lagi.' };
     }
 
-    updateCurrentUserBalance(balanceDls - dlsAmount);
-    const msg = `Withdraw berhasil! ${amt} DL dikirim ke backpack ${growId.trim()} in-game.`;
+    if (data.user) { setCurrentUser(data.user); currentUserRef.current = data.user; }
+    const msg = `Withdraw berhasil! ${amt} DL dikirim ke backpack ${String(data.user?.growId || growId).trim()} in-game.`;
     showToast(msg, 'success', 'Withdraw Delivered');
     return { success: true, message: msg };
   };
