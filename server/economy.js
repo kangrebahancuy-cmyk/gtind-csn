@@ -149,6 +149,8 @@ export function creditGameResult(userId, amount, round) {
   const db=load(); const user=db.users.find(u=>u.id===userId);
   if(!user) return {ok:false};
   const n=Number(amount||0);
+  const existing=db.transactions.find(t=>t.userId===userId && t.type==='GAME_PAYOUT' && t.referenceId===round.id);
+  if(existing) return {ok:true,balance:user.balanceDls,duplicate:true};
   if(n>0) mutateBalance(db,user,n,'GAME_PAYOUT',round.id,{gameId:round.gameId,multiplier:round.result?.multiplier||0});
   save(db);
   return {ok:true,balance:user.balanceDls};
