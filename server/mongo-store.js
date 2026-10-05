@@ -3,9 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+const isTest = process.argv.includes('--test');
 const dataDir = path.resolve(process.env.SQLITE_DATA_DIR || './data');
-const dbPath = path.resolve(process.env.SQLITE_DB_PATH || path.join(dataDir, 'gtind-csn.sqlite'));
-fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+const configuredPath = process.env.SQLITE_DB_PATH || path.join(dataDir, 'gtind-csn.sqlite');
+const dbPath = isTest ? ':memory:' : path.resolve(configuredPath);
+if (!isTest) fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
 const sqlite = new DatabaseSync(dbPath);
 sqlite.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
