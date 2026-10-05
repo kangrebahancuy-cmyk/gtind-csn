@@ -4,6 +4,7 @@ export interface UserState {
   username: string;
   growId?: string;
   linkCode?: string;
+  gtpsLinked?: boolean;
   isAuthenticated: boolean;
   balanceDls: number;
   activeCurrency: Currency;

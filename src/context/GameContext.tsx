@@ -6,6 +6,7 @@ export interface StoredAccount {
   username: string;
   password: string;
   growId?: string;
+  gtpsLinked?: boolean;
   balanceDls: number;
   linkCode?: string;
   isBanned?: boolean;
@@ -370,6 +371,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     username: currentUser ? currentUser.username : 'Guest',
     growId: currentUser?.growId,
     linkCode: currentUser?.linkCode,
+    gtpsLinked: Boolean(currentUser?.gtpsLinked && currentUser?.growId),
     isAuthenticated: currentUser !== null,
     balanceDls,
     activeCurrency,
@@ -453,7 +455,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!cu) return;
     const cleanGrow = String(growId || '').trim();
     if (!cleanGrow) return;
-    const updated = { ...cu, growId: cleanGrow, isLinked: true };
+    // gtpsLinked hanya true di sini: dikonfirmasi dari /link nyata di game
+    const updated = { ...cu, growId: cleanGrow, gtpsLinked: true };
     setCurrentUser(updated);
     try {
       localStorage.setItem('supreme_active_session', JSON.stringify(updated));
@@ -473,7 +476,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const unlinkGtps = async (): Promise<{ success: boolean; message: string }> => {
     const cu = currentUserRef.current;
     if (!cu) return { success: false, message: 'Please Sign In first.' };
-    if (!cu.growId) return { success: false, message: 'Akun belum ter-link dengan GTPS.' };
+    if (!cu.gtpsLinked || !cu.growId) return { success: false, message: 'Akun belum ter-link dengan GTPS.' };
 
     try {
       const res = await fetch('/api/gtps/unlink-web', {
@@ -483,13 +486,15 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       const data = await res.json().catch(() => ({ ok: false }));
       if (!data.ok) {
+        showToast('Gagal unlink. Pastikan server casino sudah versi terbaru, lalu coba lagi.', 'error', 'Unlink Gagal');
         return { success: false, message: 'Gagal unlink. Coba lagi.' };
       }
     } catch {
+      showToast('Server casino tidak merespons. Coba lagi.', 'error', 'Unlink Gagal');
       return { success: false, message: 'Server casino tidak merespons.' };
     }
 
-    const updated = { ...cu, growId: undefined };
+    const updated = { ...cu, growId: undefined, gtpsLinked: false };
     setCurrentUser(updated);
     try {
       localStorage.setItem('supreme_active_session', JSON.stringify(updated));
@@ -943,7 +948,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
               const cu = currentUserRef.current;
               const myGrow = String(cu?.growId || '').toLowerCase();
               if (cu && myGrow && String(data.payload.growId || '').toLowerCase() === myGrow) {
-                const updated = { ...cu, growId: undefined };
+                const updated = { ...cu, growId: undefined, gtpsLinked: false };
                 setCurrentUser(updated);
                 try {
                   localStorage.setItem('supreme_active_session', JSON.stringify(updated));

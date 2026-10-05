@@ -440,7 +440,7 @@ export const WalletModal: React.FC = () => {
 
                 <div className="p-3 rounded-xl bg-[#090e18] border border-[#1a2940] flex items-center justify-between text-xs">
                   <span className="text-slate-400">Connection Status:</span>
-                  {user.growId ? (
+                  {user.gtpsLinked && user.growId ? (
                     <span className="text-emerald-400 font-bold flex items-center gap-1">
                       <Check className="w-3.5 h-3.5" />
                       <span>Linked to {user.growId}</span>
@@ -448,12 +448,12 @@ export const WalletModal: React.FC = () => {
                   ) : (
                     <span className="text-amber-400 font-bold flex items-center gap-1">
                       <AlertCircle className="w-3.5 h-3.5" />
-                      <span>Awaiting In-Game Command</span>
+                      <span>Not Linked</span>
                     </span>
                   )}
                 </div>
 
-                {user.growId && (
+                {user.gtpsLinked && user.growId && (
                   confirmUnlink ? (
                     <div className="flex gap-2">
                       <button
