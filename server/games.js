@@ -120,7 +120,7 @@ export function installGameRoutes(app, economy) {
     round.result=result;
     const payout=Number((result.payout||0).toFixed(2));
     if (payout < 0 || payout > round.betDls * 100000) return res.status(400).json({ok:false,error:'invalid_payout'});
-    const shouldCredit=(round.gameId==='blackjack' ? result.outcome!=='continue' : (round.gameId==='crash' ? action.type==='cashout' || action.type==='cancel' || result.outcome==='loss' : (action.cashout===true || action.final===true || !['coinflip'].includes(round.gameId))));
+    const shouldCredit=(round.gameId==='blackjack' ? result.outcome!=='continue' : (round.gameId==='crash' ? action.type==='cashout' || action.type==='cancel' || result.outcome==='loss' : (round.gameId==='coinflip' ? result.outcome==='loss' || action.cashout===true || action.final===true : (action.cashout===true || action.final===true || !['coinflip'].includes(round.gameId)))));
     let credit={ok:true,balance:round.balanceAfterBet};
     if(shouldCredit){
       credit=economy.creditGameResult(user.id,payout,round);
@@ -254,7 +254,7 @@ function resolveGame(gameId, random, action, betDls, state) {
     for(const [key,raw] of Object.entries(bets)){
       const amount=validBet(key,raw)*factor; if(!amount)continue;
       let win=false,mult=0;
-      if(key==='num_0'||/^num_\\d+$/.test(key)){const n=Number(key.slice(4));win=n===number;mult=35;}
+      if(key==='num_0'||/^num_\d+$/.test(key)){const n=Number(key.slice(4));win=n===number;mult=35;}
       else if(key==='red'||key==='black'){win=number!==0&&(key==='red')===[1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36].includes(number);mult=1;}
       else if(key==='even'||key==='odd'){win=number!==0&&(key==='even'?number%2===0:number%2===1);mult=1;}
       else if(key==='1_to_18'||key==='19_to_36'){win=number!==0&&(key==='1_to_18'?number<=18:number>=19);mult=1;}
