@@ -1,6 +1,6 @@
 # GTIND-CSN Phase 5 — Operational Readiness
 
-Status: **IN PROGRESS**
+Status: **DONE — CI #80 passed.**
 
 Phase 5 hardens production operations after the Atlas and realtime authority migrations.
 
@@ -18,6 +18,6 @@ CI must pass production build, regression tests, and Node syntax checks before P
 
 ## Remaining follow-up
 
-- Regenerate and commit `package-lock.json` so CI can return from `npm install` to deterministic `npm ci`.
+- `package-lock.json` regeneration remains a follow-up because the repository currently verifies successfully with `npm install`.
 - Add durable alerting/metrics export when the deployment environment provides an observability backend.
 - Consider a future smallest-unit/Decimal128 monetary migration after a dedicated data migration plan; Phase 5 intentionally does not change the existing DLS numeric representation.
