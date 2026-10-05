@@ -5,7 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { installEconomyRoutes, sessionUser, debitForGame, creditGameResult } from './server/economy.js';
-import { loadEconomyState } from './server/economy-store.js';
+import { ensureMongoSchema, pingMongo, closeMongo } from './server/mongo-store.js';
 import { installGameRoutes } from './server/games.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -38,11 +38,10 @@ app.get('/healthz', (req, res) => {
   });
 });
 
-app.get('/readyz', (req,res) => {
+app.get('/readyz', async (req,res) => {
   try {
-    // Loading the economy store verifies that the configured persistent DB is readable.
-    loadEconomyState();
-    res.json({status:'ready',timestamp:new Date().toISOString()});
+    await pingMongo();
+    res.json({status:'ready',storage:'mongodb_atlas',timestamp:new Date().toISOString()});
   } catch (error) {
     res.status(503).json({status:'not_ready',error:'persistent_store_unavailable'});
   }
@@ -133,11 +132,19 @@ app.use((req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
 
-const shutdown = (signal) => { console.log(`[Supreme Casino] ${signal} received; shutting down`); server.close(() => process.exit(0)); setTimeout(() => process.exit(1), 10000).unref(); };
+const shutdown = (signal) => { console.log(`[Supreme Casino] ${signal} received; shutting down`); server.close(async () => { await closeMongo().catch(()=>{}); process.exit(0); }); setTimeout(() => process.exit(1), 10000).unref(); };
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-server.listen(PORT, () => {
-  console.log(`[Supreme Casino] Server running on port ${PORT}`);
-  console.log(`[Supreme Casino] Healthcheck: http://localhost:${PORT}/healthz`);
-});
+(async () => {
+  try {
+    await ensureMongoSchema();
+    server.listen(PORT, () => {
+      console.log(`[Supreme Casino] Server running on port ${PORT}`);
+      console.log(`[Supreme Casino] Healthcheck: http://localhost:${PORT}/healthz`);
+    });
+  } catch (error) {
+    console.error('[Supreme Casino] MongoDB Atlas initialization failed:', error);
+    process.exitCode = 1;
+  }
+})();
