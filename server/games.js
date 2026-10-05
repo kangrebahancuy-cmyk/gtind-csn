@@ -183,21 +183,21 @@ export function installGameRoutes(app, economy, options = {}) {
   });
   app.post('/api/crash/cashout', async (req,res) =>{
     const user=await requireUser(req,res);if(!user)return;
-    const p=crashGlobal.players.get(user.id);
+    const db=await getMongoDb(); const p=await db.collection('crashPlayers').findOneAndUpdate({roundId:crashGlobal.roundId,userId:user.id,status:'active'},{$set:{status:'settling',updatedAt:Date.now()}},{returnDocument:'after'});
     if(!p||p.roundId!==crashGlobal.roundId)return res.status(404).json({ok:false,error:'no_active_bet'});
     if(crashGlobal.phase!=='flying'||p.status!=='active')return res.status(409).json({ok:false,error:'cashout_unavailable'});
-    const result=await settleCrashPlayer(p,false);
+    crashGlobal.players.set(user.id,p); const result=await settleCrashPlayer(p,false);
     if(!result)return res.status(500).json({ok:false,error:'settlement_failed'});
-    res.json({ok:true,result:{outcome:'win',current:p.cashedAt,multiplier:p.cashedAt,payout:p.payoutDls},balanceDls:result.balance,state:publicCrashState()});
+    await db.collection('crashPlayers').updateOne({roundId:p.roundId,userId:p.userId},{$set:{...p,updatedAt:Date.now()}}); res.json({ok:true,result:{outcome:'win',current:p.cashedAt,multiplier:p.cashedAt,payout:p.payoutDls},balanceDls:result.balance,state:publicCrashState()});
   });
   app.post('/api/crash/cancel', async (req,res) =>{
     const user=await requireUser(req,res);if(!user)return;
-    const p=crashGlobal.players.get(user.id);
+    const db=await getMongoDb(); const p=await db.collection('crashPlayers').findOne({roundId:crashGlobal.roundId,userId:user.id});
     if(!p||p.roundId!==crashGlobal.roundId)return res.status(404).json({ok:false,error:'no_active_bet'});
     if(crashGlobal.phase!=='betting'||p.status!=='active')return res.status(409).json({ok:false,error:'cancel_unavailable'});
     const result=await economy.creditGameResult(user.id,p.amountDls,{id:p.roundId,gameId:'crash-global-cancel',result:{outcome:'cancelled',multiplier:1}});
     if(!result.ok)return res.status(500).json({ok:false,error:'refund_failed'});
-    p.status='cancelled'; persistCrash();
+    p.status='cancelled'; await db.collection('crashPlayers').updateOne({roundId:p.roundId,userId:p.userId,status:'active'},{$set:{status:'cancelled',updatedAt:Date.now()}}); crashGlobal.players.set(user.id,p); persistCrash();
     res.json({ok:true,balanceDls:result.balance,state:publicCrashState()});
   });
 
