@@ -57,6 +57,7 @@ app.get('/api/gtps/status', (req, res) => {
 installEconomyRoutes(app, {
   gtpsBridgeUrl: GTPS_BRIDGE_URL,
   getGtpsSecret: () => gtpsConfig.secretKey,
+  broadcast,
 });
 
 // In-memory registered link codes from website accounts (code -> { username, code, growId, timestamp })
