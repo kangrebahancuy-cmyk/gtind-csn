@@ -24,7 +24,7 @@ export function installGtpsRoutes(app,{getGtpsSecret}){
       db.collection('withdrawals').countDocuments({status:'PROCESSING'}),
       db.collection('users').countDocuments({gtpsLinked:true}),
     ]);
-    res.json({ok:true,service:'gtps-integration',storage:'mongodb_atlas',pendingWithdrawals:pending,processingWithdrawals:processing,linkedPlayers:linked,timestamp:new Date().toISOString()});
+    res.json({ok:true,service:'gtps-integration',storage:'sqlite',pendingWithdrawals:pending,processingWithdrawals:processing,linkedPlayers:linked,timestamp:new Date().toISOString()});
   });
 
   app.get('/api/gtps/withdraw-pending',async(req,res)=>{
@@ -46,7 +46,7 @@ export function installGtpsRoutes(app,{getGtpsSecret}){
         return {pending:true,withdrawal:{id:w.id,growId:user.growId,currency:w.currency,amount:w.amount,amountWl:w.amountWl,claimToken:claim,claimExpiresAt:expires.toISOString()}};
       });
       if(result.error==='growid_not_linked')return res.status(404).json({ok:false,error:result.error});
-      res.json({ok:true,...result});
+      res.json(result.pending ? {ok:true,pending:true,withdrawalId:result.withdrawal.id,growId:result.withdrawal.growId,currency:result.withdrawal.currency,amount:result.withdrawal.amount,amountWl:result.withdrawal.amountWl,claimToken:result.withdrawal.claimToken,claimExpiresAt:result.withdrawal.claimExpiresAt} : {ok:true,pending:false});
     }catch(error){console.error('[gtps-withdraw-poll]',error);res.status(500).json({ok:false,error:'withdrawal_poll_failed'});}
   });
 

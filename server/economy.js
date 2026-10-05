@@ -35,7 +35,7 @@ async function load() {
     mongo.collection('withdrawals').find({}).sort({createdAt:1}).toArray(),
     mongo.collection('auditLogs').find({}).sort({createdAt:1}).limit(10000).toArray(),
   ]);
-  const walletByUser = new Map(wallets.map(w => [String(w.userId), Number(w.balanceDls || 0)]));
+  const walletByUser = new Map(wallets.map(w => [String(w.userId), Number(w.balanceDls ?? ((Number(w?.balancesWl?.DL)||0) / 100))]));
   const db = {
     users: users.map(u => ({...u, balanceDls: walletByUser.get(String(u.id)) ?? 0})),
     transactions: transactions.map(({_id,...t})=>t),
@@ -48,7 +48,7 @@ async function load() {
   if (adminUsername && adminPassword && !db.users.some(u => normalizeUsername(u.username) === normalizeUsername(adminUsername))) {
     const admin = { id:id('usr'), username:adminUsername, passwordHash:hashPassword(adminPassword), balanceDls:0, linkCode:uniqueLinkCode(db), isBanned:false, isMuted:false, isAdmin:true, createdAt:now() };
     await mongo.collection('users').insertOne({...admin, usernameNormalized:normalizeUsername(admin.username)});
-    await mongo.collection('wallets').insertOne({userId:admin.id,balanceDls:0,updatedAt:new Date()});
+    await mongo.collection('wallets').insertOne({userId:admin.id,balanceDls:0,balancesWl:{WL:0,DL:0,BGL:0},updatedAt:new Date()});
     db.users.push(admin);
   }
   const meta = await mongo.collection('meta').findOne({_id:'economy'});
@@ -71,7 +71,7 @@ async function save(db) {
       return {...rest,usernameNormalized:normalizeUsername(u.username),growIdNormalized:u.growId?String(u.growId).trim().toLowerCase():undefined};
     });
     for (const u of userDocs) await users.replaceOne({id:u.id},u,{upsert:true,session});
-    for (const u of db.users) await wallets.replaceOne({userId:u.id},{userId:u.id,balanceDls:Number(u.balanceDls||0),updatedAt:new Date()},{upsert:true,session});
+    for (const u of db.users) { const existing=await wallets.findOne({userId:u.id},{session}); const balancesWl=existing?.balancesWl || {WL:0,DL:Math.round(Number(u.balanceDls||0)*100),BGL:0}; await wallets.replaceOne({userId:u.id},{...(existing||{}),userId:u.id,balancesWl,balanceDls:Number(u.balanceDls||0),updatedAt:new Date()},{upsert:true,session}); }
     const ledger=mongo.collection('ledger');
     for (const t of db.transactions||[]) await ledger.replaceOne({id:t.id},{...t,createdAt:new Date(t.createdAt||Date.now())},{upsert:true,session});
     const deps=mongo.collection('deposits');

@@ -46,7 +46,7 @@ app.get('/healthz', (req, res) => {
 app.get('/readyz', async (req,res) => {
   try {
     await pingMongo();
-    res.json({status:'ready',storage:'mongodb_atlas',timestamp:new Date().toISOString()});
+    res.json({status:'ready',storage:'sqlite',timestamp:new Date().toISOString()});
   } catch (error) {
     res.status(503).json({status:'not_ready',error:'persistent_store_unavailable'});
   }
@@ -186,11 +186,11 @@ process.on('SIGINT', () => shutdown('SIGINT'));
     await ensureMongoSchema();
     await installGamesPromise;
     server.listen(PORT, () => {
-      console.log(`[Supreme Casino] Server running on port ${PORT}`);
-      console.log(`[Supreme Casino] Healthcheck: http://localhost:${PORT}/healthz`);
+      console.log(`[GTIND-CSN] Server running on port ${PORT}`);
+      console.log(`[GTIND-CSN] SQLite storage ready. Healthcheck: http://localhost:${PORT}/healthz`);
     });
   } catch (error) {
-    console.error('[Supreme Casino] MongoDB Atlas initialization failed:', error);
+    console.error('[GTIND-CSN] SQLite initialization failed:', error);
     process.exitCode = 1;
   }
 })();
