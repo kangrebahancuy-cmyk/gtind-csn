@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main, phase2-game-authority]
+    branches: [main]
 
 jobs:
   build-and-check:
@@ -17,5 +17,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - run: npm test
       - run: node --check server/games.js
       - run: node --check server/economy.js
