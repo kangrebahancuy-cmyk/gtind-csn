@@ -237,7 +237,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     res.json({ ok:true, user:publicUser(user) });
   });
 
-  app.post('/api/auth/login', (req, res) => {
+  app.post('/api/auth/login', async (req, res) => {
     const username = String(req.body?.username || '').trim();
     const password = String(req.body?.password || '');
     if (!rateLimit(`login:${clientIp(req)}`,10,60000)) return res.status(429).json({ok:false,error:'rate_limited'});
@@ -281,7 +281,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     res.json({ok:true,user:publicUser(user),legacyBalanceIgnored:legacyBalance});
   });
 
-  app.post('/api/account/unlink-growid', (req,res) => {
+  app.post('/api/account/unlink-growid', async (req,res) => {
     const user=await requireAuth(req,res); if(!user)return;
     const db=await load(); const fresh=db.users.find(u=>u.id===user.id);
     if(!fresh?.growId) return res.status(400).json({ok:false,error:'not_linked'});
@@ -289,7 +289,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     res.json({ok:true,user:publicUser(fresh)});
   });
 
-  app.post('/api/account/growid', (req,res) => {
+  app.post('/api/account/growid', async (req,res) => {
     const user=await requireAuth(req,res); if(!user)return;
     const growId=String(req.body?.growId||'').trim();
     if(!growId) return res.status(400).json({ok:false,error:'invalid_growid'});
@@ -309,14 +309,14 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     res.json({ok:true,code,registered:true,username:user.username,growId:user.growId||null});
   });
 
-  app.get('/api/gtps/check-link', (req,res) => {
+  app.get('/api/gtps/check-link', async (req,res) => {
     const code=String(req.query.code||'').trim();
     const db=await load(); const user=db.users.find(u=>u.linkCode===code);
     if(!user) return res.json({linked:false,code});
     res.json({linked:Boolean(user.gtpsLinked&&user.growId),growId:user.growId||null,registered:true,username:user.username,code});
   });
 
-  app.post('/api/gtps/link-growid', (req,res) => {
+  app.post('/api/gtps/link-growid', async (req,res) => {
     const secret=String(req.body?.secretKey||req.headers['x-gtps-secret']||'');
     if(!constantTimeEqual(secret,getGtpsSecret())) return res.status(403).json({ok:false,error:'invalid_secret_key'});
     if(!rateLimit(`gtps-link:${clientIp(req)}`,30,60000)) return res.status(429).json({ok:false,error:'rate_limited'});
@@ -330,19 +330,19 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     res.json({ok:true,success:true,growId,code,user:publicUser(user)});
   });
 
-  app.post('/api/gtps/unlink', (req,res) => {
+  app.post('/api/gtps/unlink', async (req,res) => {
     const secret=String(req.body?.secretKey||req.headers['x-gtps-secret']||'');
     if(!secret || secret!==getGtpsSecret()) return res.status(403).json({ok:false,error:'invalid_secret_key'});
     const result=unlinkGrowId(req.body?.growid);
     res.json({ok:true,success:true,growId:req.body?.growid,found:Boolean(result)});
   });
 
-  app.get('/api/economy/wallet', (req,res) => {
+  app.get('/api/economy/wallet', async (req,res) => {
     const user=await requireAuth(req,res); if(!user)return;
     res.json({ok:true,user:publicUser(user)});
   });
 
-  app.post('/api/economy/tip', (req,res) => {
+  app.post('/api/economy/tip', async (req,res) => {
     const user=await requireAuth(req,res); if(!user)return;
     const target=String(req.body?.targetUser || '').trim();
     const amount=Number(req.body?.amountDls);
@@ -359,7 +359,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     res.json({ok:true,user:publicUser(sender),recipient:publicUser(recipient),amountDls:amount});
   });
 
-  app.post('/api/admin/balance', (req,res) => {
+  app.post('/api/admin/balance', async (req,res) => {
     const admin=await requireAdmin(req,res); if(!admin)return;
     const username=String(req.body?.username||'').trim(); const amount=Number(req.body?.amountDls); const mode=req.body?.mode;
     if(!username || !Number.isFinite(amount) || amount<=0 || !['add','remove'].includes(mode)) return res.status(400).json({ok:false,error:'invalid_request'});
@@ -371,7 +371,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     res.json({ok:true,user:publicUser(user)});
   });
 
-  app.post('/api/admin/status', (req,res) => {
+  app.post('/api/admin/status', async (req,res) => {
     const admin=await requireAdmin(req,res); if(!admin)return;
     const username=String(req.body?.username||'').trim(); const field=req.body?.field;
     if(!username || !['isBanned','isMuted'].includes(field)) return res.status(400).json({ok:false,error:'invalid_request'});
@@ -380,19 +380,19 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     res.json({ok:true,user:publicUser(user)});
   });
 
-  app.get('/api/admin/users', (req,res) => {
+  app.get('/api/admin/users', async (req,res) => {
     const admin=await requireAdmin(req,res); if(!admin)return;
     const db=await load();
     res.json({ok:true,users:db.users.map(publicUser)});
   });
 
-  app.get('/api/admin/withdrawals', (req,res) => {
+  app.get('/api/admin/withdrawals', async (req,res) => {
     const admin=await requireAdmin(req,res); if(!admin)return;
     const db=await load();
     res.json({ok:true,withdrawals:(db.withdrawals||[]).slice(-200).reverse()});
   });
 
-  app.post('/api/admin/withdrawals/:id/reconcile', (req,res) => {
+  app.post('/api/admin/withdrawals/:id/reconcile', async (req,res) => {
     const admin=await requireAdmin(req,res); if(!admin)return;
     const action=String(req.body?.action||'');
     if(!['complete','fail_refund'].includes(action)) return res.status(400).json({ok:false,error:'invalid_reconcile_action'});
@@ -479,7 +479,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     }
   });
 
-  app.get('/api/economy/transactions', (req,res) => {
+  app.get('/api/economy/transactions', async (req,res) => {
     const user=await requireAuth(req,res); if(!user)return;
     const db=await load();
     res.json({ok:true,transactions:db.transactions.filter(t=>t.userId===user.id).slice(-100).reverse()});
