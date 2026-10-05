@@ -29,6 +29,7 @@ app.use((req,res,next)=>{
   res.setHeader('X-Content-Type-Options','nosniff');
   res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy','camera=(), microphone=(), geolocation=()');
+  res.setHeader('Content-Security-Policy',"default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; font-src 'self' data:");
   if(req.secure || String(req.headers['x-forwarded-proto']||'').includes('https')) res.setHeader('Strict-Transport-Security','max-age=31536000; includeSubDomains');
   next();
 });
@@ -118,6 +119,7 @@ function broadcast(data, excludeWs = null) {
   }
 }
 
+const wsRate = new WeakMap();
 wss.on('connection', async (ws, req) => {
   const user = await sessionUser(req).catch(() => null);
   if (!user) {
@@ -138,8 +140,21 @@ wss.on('connection', async (ws, req) => {
     },
   }));
 
+  wsRate.set(ws,{count:0,resetAt:Date.now()+10000});
   ws.on('message', (raw) => {
     try {
+      if (raw.length > 8192) {
+        ws.send(JSON.stringify({type:'ERROR',payload:{error:'message_too_large'}}));
+        return;
+      }
+      const rate=wsRate.get(ws);
+      const now=Date.now();
+      if (now>=rate.resetAt) { rate.count=0; rate.resetAt=now+10000; }
+      rate.count += 1;
+      if (rate.count > 20) {
+        ws.send(JSON.stringify({type:'ERROR',payload:{error:'rate_limited'}}));
+        return;
+      }
       const message = JSON.parse(raw.toString());
       if (message.type !== 'CHAT_MESSAGE') {
         if (message.type === 'LIVE_BET' || message.type === 'BATTLE_CREATE' || message.type === 'BATTLE_UPDATE') {
@@ -170,6 +185,7 @@ wss.on('connection', async (ws, req) => {
       console.error('WS parse error:', err);
     }
   });
+  ws.on('close',()=>wsRate.delete(ws));
 });
 
 // SPA fallback: send index.html for any client-side routes
