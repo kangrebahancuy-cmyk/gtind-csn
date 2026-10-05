@@ -78,50 +78,7 @@ export const STARTER_BATTLE_CASES: CustomCase[] = [
   },
 ];
 
-export const STARTER_LOBBY_BATTLES: BattleInstance[] = [
-  {
-    id: 'battle_demo_1',
-    mode: 'normal',
-    playerConfig: '1v1',
-    cases: [STARTER_BATTLE_CASES[0], STARTER_BATTLE_CASES[0]],
-    players: [
-      {
-        id: 'bot_vortex',
-        name: 'VortexBot 🤖',
-        avatar: '🤖',
-        isBot: true,
-        isUser: false,
-        unboxedItems: [],
-        totalValue: 0,
-      },
-    ],
-    totalCostPerPlayer: 20,
-    totalPot: 40,
-    status: 'open',
-    createdAt: Date.now() - 60000,
-  },
-  {
-    id: 'battle_demo_2',
-    mode: 'normal',
-    playerConfig: '1v1',
-    cases: [STARTER_BATTLE_CASES[1]],
-    players: [
-      {
-        id: 'bot_growking',
-        name: 'GrowKing 🤖',
-        avatar: '👑',
-        isBot: true,
-        isUser: false,
-        unboxedItems: [],
-        totalValue: 0,
-      },
-    ],
-    totalCostPerPlayer: 50,
-    totalPot: 100,
-    status: 'open',
-    createdAt: Date.now() - 120000,
-  },
-];
+export const STARTER_LOBBY_BATTLES: BattleInstance[] = [];
 
 export interface BattlePlayer {
   id: string;
