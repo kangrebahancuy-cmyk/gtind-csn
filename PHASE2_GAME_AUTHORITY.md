@@ -26,7 +26,7 @@ All currently server-authorized real-value games use the server round API:
 - Dice
 - Blackjack
 - Cases
-- Case Battles (server-vs-house)
+- Case Battles (server-authoritative 1v1 PvP)
 - Crash
 
 The server rejects any game ID outside this whitelist. The migrated frontend game components contain no calls to the legacy client-side balance settlement methods.
@@ -36,7 +36,7 @@ Important:
 - Cases use a server-owned case catalog in `data/cases.json`.
 - Roulette validates the submitted stake against the amount debited in DLS.
 - Crash settlement uses server-side elapsed time and crash point.
-- True player-vs-player Case Battle matchmaking is intentionally disabled; the real-money path is server-vs-house.
+- Case Battle 1v1 PvP matchmaking is server-authoritative: creator stake is locked, opponent stake is locked on join, both players use the same server-owned battle seed, and winner/tie settlement is server-side. Bots are disabled.
 - Economy persistence now uses a file-backed SQLite store (`data/economy.sqlite`) with WAL, FULL synchronous durability, and optimistic version checks. The previous `data/economy.json` is imported automatically on first startup when present.
 
 ## Validation
@@ -69,9 +69,10 @@ Phase 2 game authority now has transactional local persistence and concurrency c
 
 ### Case Battles
 - Client-funded joins and client-side payout have been disabled.
-- Demo bot lobby entries have been removed.
-- The current real-money path uses a server-authoritative house battle round; client-side PvP matchmaking is intentionally blocked until a server lobby/join/settlement service is implemented.
-- Client animation must never be treated as the settlement source.
+- Demo bot lobby entries and bot filling are disabled.
+- The real-money path now uses a server lobby with 1v1 player-vs-player matchmaking.
+- The server locks both stakes, generates the battle seed, rolls each player's case items, compares totals, and settles the winner or refunds both players on a draw.
+- The legacy generic `gameId=case-battles` house endpoint is disabled; clients must use the dedicated PvP endpoints.
 
 ### Crash
 - Bet debit is server-side.
