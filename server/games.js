@@ -337,13 +337,13 @@ export function installGameRoutes(app, economy, options = {}) {
       const difficulty=String(req.body?.difficulty||'Easy'); const cfg=TOWERS_CONFIGS[difficulty]||TOWERS_CONFIGS.Easy; const cols=cfg.columns; const traps=cfg.traps;
       const rr=rng(serverSeed+':towers'); round.state={floor:0,difficulty,cols,traps,trapsMap:Array.from({length:8},()=>{const set=new Set();while(set.size<traps)set.add(Math.floor(rr()*cols));return [...set];}),traps:[],multipliers:cfg.multipliers};
     }
-    rounds.set(round.id,round); persist();
+    rounds.set(round.id,round); await (await getMongoDb()).collection('gameRounds').insertOne(round); persist();
     res.json({ok:true,roundId:round.id,serverSeedHash:commitment,clientSeed,nonce,balanceDls:result.balance,initialResult:round.initialResult||undefined});
   });
 
   app.post('/api/games/resolve', async (req,res) => {
     const user=await requireUser(req,res); if(!user)return;
-    const round=rounds.get(String(req.body?.roundId||''));
+    const round=(await (async()=>{const rr=String(req.body?.roundId||''); const db=await getMongoDb(); return await db.collection('gameRounds').findOne({id:rr,userId:user.id});})()) || rounds.get(String(req.body?.roundId||''));
     if(!round || round.userId!==user.id) return res.status(404).json({ok:false,error:'round_not_found'});
     if(round.status!=='ACTIVE') return res.status(409).json({ok:false,error:'round_already_resolved'});
     const action=req.body?.action && typeof req.body.action==='object' ? req.body.action : {};
