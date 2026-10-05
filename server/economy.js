@@ -9,16 +9,17 @@ const MAX_BODY_AMOUNT = 100000000;
 function constantTimeEqual(a,b) { const aa=Buffer.from(String(a)); const bb=Buffer.from(String(b)); return aa.length===bb.length && crypto.timingSafeEqual(aa,bb); }
 async function rateLimit(key, limit=30, windowMs=60000) {
   const nowMs=Date.now();
-  const db=await getMongoDb();
-  const c=db.collection('rateLimits');
-  const current=await c.findOne({key});
-  if(!current || current.expiresAt.getTime()<=nowMs){
-    await c.updateOne({key},{$set:{key,count:1,windowMs,expiresAt:new Date(nowMs+windowMs),updatedAt:new Date()}},{upsert:true});
-    return true;
-  }
-  if(current.count>=limit)return false;
-  const updated=await c.findOneAndUpdate({key,count:current.count},{$inc:{count:1},$set:{updatedAt:new Date()}},{returnDocument:'after'});
-  return Boolean(updated && updated.count<=limit);
+  return withMongoTransaction(async (_session, db) => {
+    const c=db.collection('rateLimits');
+    const current=await c.findOne({key});
+    if(!current || current.expiresAt.getTime()<=nowMs){
+      await c.updateOne({key},{$set:{key,count:1,windowMs,expiresAt:new Date(nowMs+windowMs),updatedAt:new Date()}},{upsert:true});
+      return true;
+    }
+    if(current.count>=limit)return false;
+    const updated=await c.findOneAndUpdate({key,count:current.count},{$inc:{count:1},$set:{updatedAt:new Date()}},{returnDocument:'after'});
+    return Boolean(updated && updated.count<=limit);
+  });
 }
 function clientIp(req) { return String(req.headers['x-forwarded-for']||req.socket?.remoteAddress||'unknown').split(',')[0].trim(); }
 function audit(db, actor, action, metadata={}) { db.auditLogs ||= []; db.auditLogs.push({id:id('audit'),actorUserId:actor?.id||null,actorUsername:actor?.username||null,action,metadata,createdAt:now()}); if(db.auditLogs.length>10000) db.auditLogs=db.auditLogs.slice(-10000); }
