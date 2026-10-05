@@ -7,6 +7,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { installEconomyRoutes, sessionUser, debitForGame, creditGameResult } from './server/economy.js';
 import { ensureMongoSchema, pingMongo, closeMongo } from './server/mongo-store.js';
 import { installGameRoutes } from './server/games.js';
+import { installProgressionRoutes } from './server/progression.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -75,6 +76,8 @@ app.get('/api/gtps/status', (req, res) => {
     syncCount: gtpsConfig.activeSyncCount,
   });
 });
+
+installProgressionRoutes(app, { sessionUser });
 
 installEconomyRoutes(app, {
   gtpsBridgeUrl: GTPS_BRIDGE_URL,
