@@ -6,7 +6,9 @@ const DATA_DIR = path.join(process.cwd(), 'data');
 const FILE = path.join(DATA_DIR, 'game-rounds.json');
 const rounds = new Map();
 const caseCatalog = new Map();
+const caseBattles = new Map();
 const CASE_FILE = path.join(DATA_DIR, 'cases.json');
+const CASE_BATTLE_FILE = path.join(DATA_DIR, 'case-battles.json');
 const SERVER_AUTH_GAMES = new Set(['coinflip','mines','towers','roulette','keno','dice','blackjack','cases','case-battles','crash']);
 const TOWERS_CONFIGS = { Easy:{columns:4,traps:1,multipliers:[1.28,1.65,2.15,2.8,3.65,4.8,6.3,8.3]}, Medium:{columns:3,traps:1,multipliers:[1.45,2.15,3.2,4.75,7.05,10.5,15.6,23.2]}, Hard:{columns:2,traps:1,multipliers:[1.95,3.85,7.6,15,29.5,58,114,225]}, Extreme:{columns:3,traps:2,multipliers:[2.9,8.5,25,74,218,645,1900,5600]} };
 const KENO_PAYTABLES = { Classic:{1:{0:0,1:3.8},2:{0:0,1:1.7,2:5.2},3:{0:0,1:1,2:2.7,3:26},4:{0:0,1:0,2:1.8,3:8,4:80},5:{0:0,1:0,2:1.4,3:4,4:25,5:300},6:{0:0,1:0,2:0,3:3,4:12,5:90,6:800},7:{0:0,1:0,2:0,3:1.8,4:6,5:30,6:250,7:2000},8:{0:0,1:0,2:0,3:0,4:4,5:18,6:100,7:600,8:3000},9:{0:0,1:0,2:0,3:0,4:2.5,5:10,6:45,7:250,8:1200,9:4500},10:{0:0,1:0,2:0,3:0,4:1.6,5:4.5,6:18,7:80,8:400,9:2000,10:7500}}, Low:{1:{0:0,1:1.95},2:{0:0,1:1.95,2:3.9},3:{0:0,1:1.1,2:2.2,3:13.5},4:{0:0,1:.5,2:1.6,3:4.2,4:24.5},5:{0:0,1:.5,2:1.2,3:2.5,4:12,5:120},6:{0:0,1:0,2:1,3:2,4:6,5:30,6:350},7:{0:0,1:0,2:.8,3:1.5,4:3.5,5:14,6:90,7:700},8:{0:0,1:0,2:.5,3:1.2,4:2.5,5:8,6:45,7:250,8:1200},9:{0:0,1:0,2:0,3:1,4:2,5:5,6:22,7:100,8:500,9:2500},10:{0:0,1:0,2:0,3:.8,4:1.5,5:3.5,6:12,7:45,8:200,9:1000,10:4000}}, Medium:{1:{0:0,1:3.8},2:{0:0,1:1.75,2:4.95},3:{0:0,1:1,2:2.8,3:28},4:{0:0,1:0,2:1.75,3:8.5,4:85},5:{0:0,1:0,2:1.4,3:4,4:27,5:350},6:{0:0,1:0,2:0,3:3,4:12.5,5:95,6:900},7:{0:0,1:0,2:0,3:1.8,4:6.5,5:32,6:275,7:2200},8:{0:0,1:0,2:0,3:0,4:4.2,5:19,6:110,7:650,8:3500},9:{0:0,1:0,2:0,3:0,4:2.5,5:11,6:48,7:280,8:1350,9:5000},10:{0:0,1:0,2:0,3:0,4:1.7,5:4.8,6:19.5,7:85,8:450,9:2200,10:8500}}, High:{1:{0:0,1:3.96},2:{0:0,1:0,2:9.9},3:{0:0,1:0,2:3.5,3:52},4:{0:0,1:0,2:2,3:14,4:170},5:{0:0,1:0,2:0,3:5.5,4:55,5:750},6:{0:0,1:0,2:0,3:0,4:20,5:180,6:2000},7:{0:0,1:0,2:0,3:0,4:9,5:65,6:600,7:5000},8:{0:0,1:0,2:0,3:0,4:0,5:35,6:250,7:1500,8:9000},9:{0:0,1:0,2:0,3:0,4:0,5:18,6:100,7:650,8:3200,9:15000},10:{0:0,1:0,2:0,3:0,4:0,5:8.5,6:40,7:200,8:1100,9:5500,10:25000}} };
@@ -18,7 +20,10 @@ function ensure() {
 }
 function persistCases(){ensure();fs.writeFileSync(CASE_FILE+'.tmp',JSON.stringify([...caseCatalog.values()],null,2));fs.renameSync(CASE_FILE+'.tmp',CASE_FILE);}
 function loadCases(){ensure();try{const rows=JSON.parse(fs.readFileSync(CASE_FILE,'utf8'));if(Array.isArray(rows))rows.forEach(c=>caseCatalog.set(String(c.id),c));}catch{}}
+function persistCaseBattles(){ensure();fs.writeFileSync(CASE_BATTLE_FILE+'.tmp',JSON.stringify([...caseBattles.values()].slice(-2000),null,2));fs.renameSync(CASE_BATTLE_FILE+'.tmp',CASE_BATTLE_FILE);}
+function loadCaseBattles(){ensure();try{const rows=JSON.parse(fs.readFileSync(CASE_BATTLE_FILE,'utf8'));if(Array.isArray(rows))rows.forEach(b=>caseBattles.set(b.id,b));}catch{}}
 loadCases();
+loadCaseBattles();
 function persist() {
   ensure();
   fs.writeFileSync(FILE + '.tmp', JSON.stringify([...rounds.values()].slice(-5000), null, 2));
@@ -69,6 +74,76 @@ export function installGameRoutes(app, economy) {
     caseCatalog.set(safe.id,safe);persistCases();res.json({ok:true,case:safe});
   });
   app.delete('/api/games/cases/catalog/:id',(req,res)=>{const user=requireUser(req,res);if(!user)return;if(!user.isAdmin)return res.status(403).json({ok:false,error:'admin_required'});caseCatalog.delete(String(req.params.id));persistCases();res.json({ok:true});});
+  app.get('/api/games/case-battles/lobby', (req,res) => {
+    const battles=[...caseBattles.values()]
+      .filter(b=>b.status==='open')
+      .sort((a,b)=>b.createdAt-a.createdAt)
+      .slice(0,100)
+      .map(publicCaseBattle);
+    res.json({ok:true,battles});
+  });
+
+  app.post('/api/games/case-battles/create', (req,res) => {
+    const user=requireUser(req,res);if(!user)return;
+    const config=String(req.body?.playerConfig||'1v1');
+    if(config!=='1v1')return res.status(400).json({ok:false,error:'only_1v1_is_currently_supported'});
+    const ids=Array.isArray(req.body?.caseIds)?req.body.caseIds.map(String):[];
+    if(!ids.length||ids.length>20)return res.status(400).json({ok:false,error:'invalid_cases'});
+    const cases=ids.map(x=>caseCatalog.get(x));
+    if(cases.some(x=>!x))return res.status(400).json({ok:false,error:'case_not_found'});
+    const betDls=Number(cases.reduce((n,x)=>n+Number(x.price||0),0).toFixed(2));
+    if(!Number.isFinite(betDls)||betDls<=0)return res.status(400).json({ok:false,error:'invalid_battle_value'});
+    const debit=economy.debitForGame(user.id,betDls,'case-battle-pvp');
+    if(!debit.ok)return res.status(400).json({ok:false,error:debit.error});
+    const battleId='cb_'+Date.now()+'_'+crypto.randomBytes(6).toString('hex');
+    const serverSeed=crypto.randomBytes(32).toString('hex');
+    const battle={
+      id:battleId,mode:String(req.body?.mode||'normal'),playerConfig:config,caseIds:ids,
+      totalCostPerPlayer:betDls,totalPot:betDls,status:'open',createdAt:Date.now(),
+      creator:{userId:user.id,username:user.username,betDls},
+      players:[{userId:user.id,username:user.username,betDls}],
+      serverSeed,serverSeedHash:hash(serverSeed)
+    };
+    caseBattles.set(battle.id,battle);persistCaseBattles();
+    res.json({ok:true,battle:publicCaseBattle(battle),balanceDls:debit.balance});
+  });
+
+  app.post('/api/games/case-battles/join', (req,res) => {
+    const user=requireUser(req,res);if(!user)return;
+    const battle=caseBattles.get(String(req.body?.battleId||''));
+    if(!battle)return res.status(404).json({ok:false,error:'battle_not_found'});
+    if(battle.status!=='open')return res.status(409).json({ok:false,error:'battle_not_open'});
+    if(battle.players.some(p=>p.userId===user.id))return res.status(409).json({ok:false,error:'already_in_battle'});
+    const debit=economy.debitForGame(user.id,battle.totalCostPerPlayer,'case-battle-pvp');
+    if(!debit.ok)return res.status(400).json({ok:false,error:debit.error});
+    battle.players.push({userId:user.id,username:user.username,betDls:battle.totalCostPerPlayer});
+    battle.status='finished';
+    const result=resolvePvPCaseBattle(battle);
+    battle.result=result;
+    const payout=Number(result.payout||0);
+    const settlementRound={id:battle.id,gameId:'case-battle-pvp',result};
+    if(payout>0){
+      const credit=economy.creditGameResult(result.winnerUserId,payout,settlementRound);
+      if(!credit.ok){battle.status='settlement_failed';persistCaseBattles();return res.status(500).json({ok:false,error:'settlement_failed'});}
+      battle.payoutDls=payout;
+    }
+    battle.resolvedAt=new Date().toISOString();
+    persistCaseBattles();
+    res.json({ok:true,battle:publicCaseBattle(battle,true),result,balanceDls:debit.balance});
+  });
+
+  app.post('/api/games/case-battles/cancel', (req,res) => {
+    const user=requireUser(req,res);if(!user)return;
+    const battle=caseBattles.get(String(req.body?.battleId||''));
+    if(!battle)return res.status(404).json({ok:false,error:'battle_not_found'});
+    if(battle.status!=='open')return res.status(409).json({ok:false,error:'battle_not_open'});
+    if(battle.creator.userId!==user.id)return res.status(403).json({ok:false,error:'creator_required'});
+    const refund=economy.creditGameResult(user.id,battle.totalCostPerPlayer,{id:battle.id,gameId:'case-battle-cancel',result:{multiplier:1}});
+    if(!refund.ok)return res.status(500).json({ok:false,error:'refund_failed'});
+    battle.status='cancelled';battle.resolvedAt=new Date().toISOString();persistCaseBattles();
+    res.json({ok:true,balanceDls:refund.balance});
+  });
+
   app.get('/api/games/fairness', (req,res) => {
     const user=requireUser(req,res); if(!user)return;
     res.json({ok:true,algorithm:'HMAC-SHA256',description:'Server seed is generated server-side and only its SHA-256 commitment is exposed before the result.'});
@@ -272,6 +347,32 @@ export function minesMultiplier(size,mineCount,revealed) {
   for(let i=0;i<revealed;i++)prob*=(total-mineCount-i)/(total-i);
   return Math.max(1.01,Number((0.99/prob).toFixed(2)));
 }
+function publicCaseBattle(battle,includeResult=false){
+  const out={id:battle.id,mode:battle.mode,playerConfig:battle.playerConfig,caseIds:battle.caseIds,totalCostPerPlayer:battle.totalCostPerPlayer,totalPot:battle.totalPot,status:battle.status,createdAt:battle.createdAt,players:battle.players.map(p=>({username:p.username,betDls:p.betDls}))};
+  if(battle.result)out.result=includeResult?battle.result:{outcome:battle.result.outcome};
+  if(battle.status==='finished'||battle.status==='cancelled')out.serverSeed=battle.serverSeed;
+  out.serverSeedHash=battle.serverSeedHash;
+  return out;
+}
+function resolvePvPCaseBattle(battle){
+  const totals=new Map(),itemsByPlayer={};
+  for(const p of battle.players){
+    let total=0;const items=[];
+    for(const caseId of battle.caseIds){
+      const c=caseCatalog.get(caseId);if(!c)throw new Error('case_not_found');
+      const rr=rng(battle.serverSeed+':pvp:'+p.userId+':'+caseId+':'+items.length);
+      let x=rr()*100,chosen=c.items[c.items.length-1];
+      for(const item of c.items){x-=Math.max(0,Number(item.chance)||0);if(x<=0){chosen=item;break;}}
+      items.push(chosen);total+=Number(chosen.price||0);
+    }
+    totals.set(p.userId,Number(total.toFixed(2)));itemsByPlayer[p.userId]=items;
+  }
+  const a=battle.players[0],b=battle.players[1],at=totals.get(a.userId)||0,bt=totals.get(b.userId)||0;
+  if(at===bt)return {outcome:'draw',winnerUserId:null,payout:0,refundEach:true,players:battle.players.map(p=>({username:p.username,userId:p.userId,totalValue:totals.get(p.userId),items:itemsByPlayer[p.userId]}))};
+  const winner=at>bt?a:b;
+  return {outcome:'win',winnerUserId:winner.userId,winnerUsername:winner.username,payout:Number((battle.totalCostPerPlayer*2).toFixed(2)),players:battle.players.map(p=>({username:p.username,userId:p.userId,totalValue:totals.get(p.userId),items:itemsByPlayer[p.userId]}))};
+}
+
 function resolveCaseBattle(round,r,action){
   const ids=Array.isArray(round.state?.caseIds)?round.state.caseIds:[];if(!ids.length)return {outcome:'invalid',payout:0,error:'case_not_found'};
   let userTotal=0,houseTotal=0;const userItems=[],houseItems=[];
