@@ -56,7 +56,7 @@ export function crashPointFromSeed(seed) {
   return Math.min(10000,Math.max(1,Number((0.99/(1-u)).toFixed(2))));
 }
 async function requireUser(req, res) {
-  const user = await await economy.sessionUser(req);
+  const user = await economy.sessionUser(req);
   if (!user) { res.status(401).json({ ok:false,error:'not_authenticated' }); return null; }
   return user;
 }
