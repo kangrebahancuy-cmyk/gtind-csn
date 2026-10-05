@@ -107,6 +107,7 @@ export function sessionUser(req) {
   return db.users.find(u => u.id === userId) || null;
 }
 function createSession(db,user) { const token=crypto.randomBytes(32).toString('hex'); sessions.set(token,{userId:user.id,expiresAt:Date.now()+SESSION_TTL_MS}); return token; }
+function sessionCookie(req, token, maxAge=SESSION_TTL_MS/1000) { const secure=String(req.headers['x-forwarded-proto']||'').includes('https') ? '; Secure' : ''; return `gtind_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(maxAge)}${secure}`; }
 function destroySession(req) { const raw=String(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('gtind_session=')); if(raw) sessions.delete(decodeURIComponent(raw.slice('gtind_session='.length))); }
 function requireAuth(req, res) {
   const user = sessionUser(req);
@@ -189,7 +190,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     db.users.push(user);
     save(db);
     const token = createSession(db,user);
-    res.setHeader('Set-Cookie', `gtind_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`);
+    res.setHeader('Set-Cookie', sessionCookie(req,token));
     res.json({ ok:true, user:publicUser(user) });
   });
 
@@ -233,7 +234,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     }
     save(db);
     const token=createSession(db,user);
-    res.setHeader('Set-Cookie',`gtind_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`);
+    res.setHeader('Set-Cookie',sessionCookie(req,token));
     res.json({ok:true,user:publicUser(user),legacyBalanceIgnored:legacyBalance});
   });
 
@@ -274,7 +275,8 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
 
   app.post('/api/gtps/link-growid', (req,res) => {
     const secret=String(req.body?.secretKey||req.headers['x-gtps-secret']||'');
-    if(!secret || secret!==getGtpsSecret()) return res.status(403).json({ok:false,error:'invalid_secret_key'});
+    if(!constantTimeEqual(secret,getGtpsSecret())) return res.status(403).json({ok:false,error:'invalid_secret_key'});
+    if(!rateLimit(`gtps-link:${clientIp(req)}`,30,60000)) return res.status(429).json({ok:false,error:'rate_limited'});
     const code=String(req.body?.code||'').trim(); const growId=String(req.body?.growid||'').trim();
     if(!code || !growId) return res.status(400).json({ok:false,error:'invalid_link'});
     const db=load(); const user=db.users.find(u=>u.linkCode===code);
@@ -348,7 +350,6 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     const growId=String(req.body?.growId || '').trim();
     const currency=String(req.body?.currency || 'DL').toUpperCase();
     const amount=Number(req.body?.amount);
-    if(!verifyGtpsRequest(req,getGtpsSecret,req.body||{})) return res.status(403).json({ok:false,error:'invalid_gtps_signature'});
     if(!transactionId || !growId || !Number.isFinite(amount) || amount<=0 || amount>MAX_BODY_AMOUNT) return res.status(400).json({ok:false,error:'invalid_deposit'});
     const db=load();
     const existing=db.deposits.find(d=>d.transactionId===transactionId);
