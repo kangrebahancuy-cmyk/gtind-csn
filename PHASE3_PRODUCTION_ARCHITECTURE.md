@@ -1,6 +1,6 @@
 # GTIND-CSN Phase 3 — Production Architecture
 
-**Status: IN PROGRESS**
+**Status: IN PROGRESS — core hardening implemented; shared PostgreSQL/Redis migration remains.**
 
 ## Completed in this phase
 
@@ -12,6 +12,10 @@
 - SIGINT/SIGTERM graceful shutdown was added.
 - Regression coverage includes persistent session creation, lookup and deletion.
 - Crash state remains persisted across process restarts.
+- Withdrawals now support an `Idempotency-Key` and include the withdrawal ID when calling the GTPS bridge.
+- A bridge/network uncertainty no longer triggers an automatic refund; the withdrawal becomes `UNKNOWN` and requires reconciliation.
+- Admins can list and reconcile `PENDING`/`UNKNOWN` withdrawals as `complete` or `fail_refund`.
+- Security response headers, request IDs, JSON body limits, readiness checks, and graceful shutdown are enabled.
 - Case Battle state remains persisted and server-authoritative.
 
 ## Architecture target
