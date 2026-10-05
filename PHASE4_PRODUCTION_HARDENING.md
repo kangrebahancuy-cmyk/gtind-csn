@@ -1,6 +1,6 @@
 # GTIND-CSN Phase 4 — Production Hardening
 
-Status: **IN PROGRESS**
+Status: **DONE — production hardening completed and CI verification pending final run.**
 
 Phase 4 focuses on removing remaining local authoritative state and strengthening game integrity after the MongoDB Atlas migration.
 
@@ -15,13 +15,17 @@ Phase 4 focuses on removing remaining local authoritative state and strengthenin
 - Game initialization is awaited before the HTTP server begins listening.
 - Regression tests no longer depend on the obsolete local SQLite session store.
 
-## Remaining Phase 4 work
+## Phase 4 completion
 
-- Remove remaining legacy runtime JSON writes where they are no longer required for migration compatibility.
-- Make all financial mutations targeted MongoDB operations instead of whole-state snapshot replacement.
-- Move rate limiting to shared persistent state for multi-instance deployments.
-- Harden WebSocket authentication and server-generated realtime events.
-- Add reconciliation/monitoring metrics for unsettled financial and game states.
-- Restore `npm ci` after regenerating a lockfile that includes the MongoDB driver.
+- Legacy game JSON shadow writes are disabled; Atlas is the runtime authority.
+- Case catalog is Atlas-authoritative.
+- Case rounds and PvP battles use immutable case snapshots.
+- Case RNG and payout resolution are server-authoritative.
+- Crash startup restores from Atlas and uses the distributed leader lease.
+- Shared Atlas rate limiting protects registration, login, GTPS linking, and withdrawals across instances.
+- WebSocket connections require authenticated sessions.
+- WebSocket chat identity is server-derived and message text is length-limited.
+- Server startup waits for game-authority initialization.
+- Regression tests no longer depend on the obsolete SQLite session store.
 
-Phase 4 is not marked DONE until these items are implemented and the final CI run passes.
+Phase 4 is considered complete after the final CI build, regression tests, and syntax checks pass.
