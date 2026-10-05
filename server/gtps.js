@@ -9,11 +9,24 @@ function equalSecret(a,b){
   return aa.length>0 && aa.length===bb.length && crypto.timingSafeEqual(aa,bb);
 }
 function authorize(req,getSecret){
-  const secret=String(req.query?.secretKey||req.body?.secretKey||req.headers['x-gtps-secret']||'');
+  const secret=String(req.headers['x-gtps-secret']||'');
   return equalSecret(secret,getSecret?.());
 }
 function normalizeGrowId(v){return String(v||'').trim().toLowerCase();}
 function token(){return crypto.randomBytes(32).toString('hex');}
+
+const gtpsRateBuckets = new Map();
+function gtpsRateLimit(key, limit, windowMs){
+  const now=Date.now();
+  const current=gtpsRateBuckets.get(key);
+  if(!current || current.resetAt<=now){ gtpsRateBuckets.set(key,{count:1,resetAt:now+windowMs}); return true; }
+  if(current.count>=limit) return false;
+  current.count += 1;
+  return true;
+}
+function gtpsClientKey(req){
+  return String(req.headers['x-forwarded-for']||req.socket?.remoteAddress||'unknown').split(',')[0].trim();
+}
 
 export function installGtpsRoutes(app,{getGtpsSecret}){
   app.get('/api/gtps/status',async(req,res)=>{
@@ -29,6 +42,7 @@ export function installGtpsRoutes(app,{getGtpsSecret}){
 
   app.get('/api/gtps/withdraw-pending',async(req,res)=>{
     if(!authorize(req,getGtpsSecret))return res.status(403).json({ok:false,error:'invalid_secret_key'});
+    if(!gtpsRateLimit('/api/gtps/withdraw-pending:client:'+gtpsClientKey(req),30,60000))return res.status(429).json({ok:false,error:'rate_limited'});
     const growId=String(req.query?.growId||'').trim();
     if(!growId)return res.status(400).json({ok:false,error:'invalid_growid'});
     const db=await getMongoDb();
@@ -52,6 +66,7 @@ export function installGtpsRoutes(app,{getGtpsSecret}){
 
   app.post('/api/gtps/withdraw-confirm',async(req,res)=>{
     if(!authorize(req,getGtpsSecret))return res.status(403).json({ok:false,error:'invalid_secret_key'});
+    if(!gtpsRateLimit('/api/gtps/withdraw-confirm:client:'+gtpsClientKey(req),60,60000))return res.status(429).json({ok:false,error:'rate_limited'});
     const withdrawalId=String(req.body?.withdrawalId||'').trim();
     const claimToken=String(req.body?.claimToken||'').trim();
     const growId=String(req.body?.growId||'').trim();
@@ -77,6 +92,7 @@ export function installGtpsRoutes(app,{getGtpsSecret}){
 
   app.post('/api/gtps/withdraw-fail',async(req,res)=>{
     if(!authorize(req,getGtpsSecret))return res.status(403).json({ok:false,error:'invalid_secret_key'});
+    if(!gtpsRateLimit('/api/gtps/withdraw-fail:client:'+gtpsClientKey(req),60,60000))return res.status(429).json({ok:false,error:'rate_limited'});
     const withdrawalId=String(req.body?.withdrawalId||'').trim();
     const claimToken=String(req.body?.claimToken||'').trim();
     const reason=String(req.body?.reason||'gtps_item_delivery_failed').slice(0,200);
