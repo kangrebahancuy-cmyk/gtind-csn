@@ -21,6 +21,7 @@ export const CoinflipGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     checkCanPlayGame,
     startGameRound,
     resolveGameRound,
+    showToast,
   } = useGame();
 
   const [betMode, setBetMode] = useState<'manual' | 'auto'>('manual');
