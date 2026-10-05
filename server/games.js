@@ -317,9 +317,17 @@ export function installGameRoutes(app, economy, options = {}) {
     if (!SERVER_AUTH_GAMES.has(gameId)) return res.status(409).json({ok:false,error:'game_not_server_authoritative'});
     if (gameId==='case-battles') return res.status(410).json({ok:false,error:'use_case_battles_pvp_endpoint'});
     if (!gameId || !Number.isFinite(betDls) || betDls<=0 || betDls>100000000) return res.status(400).json({ok:false,error:'invalid_bet'});
-    if(gameId==='cases'){const c=caseCatalog.get(String(req.body?.caseId||''));const count=Math.max(1,Math.min(4,Number(req.body?.count)||1));if(!c)return res.status(400).json({ok:false,error:'case_not_found'});if(Math.abs(c.price*count-betDls)>0.01)return res.status(400).json({ok:false,error:'case_price_mismatch'});}
+    let caseMap = new Map();
+    if (gameId === 'cases') {
+      const caseId = String(req.body?.caseId || '');
+      const docs = await (await getMongoDb()).collection('caseCatalog').find({id:caseId}).toArray();
+      caseMap = new Map(docs.map(c => [String(c.id), c]));
+      const c = caseMap.get(caseId);
+      const count = Math.max(1, Math.min(4, Number(req.body?.count) || 1));
+      if (!c) return res.status(400).json({ok:false,error:'case_not_found'});
+      if (Math.abs(c.price * count - betDls) > 0.01) return res.status(400).json({ok:false,error:'case_price_mismatch'});
+    }
     if(gameId==='crash')return res.status(410).json({ok:false,error:'use_global_crash_endpoint'});
-    if(gameId==='case-battles'){const ids=Array.isArray(req.body?.caseIds)?req.body.caseIds.map(String):[String(req.body?.caseId||'')];const caseDocs=await (await getMongoDb()).collection('caseCatalog').find({id:{$in:ids}}).toArray();const caseMap=new Map(caseDocs.map(c=>[String(c.id),c]));const cs=ids.map(id=>caseMap.get(id));if(!cs.length||cs.some(c=>!c))return res.status(400).json({ok:false,error:'case_not_found'});const total=cs.reduce((n,c)=>n+Number(c.price||0),0);if(Math.abs(total-betDls)>0.01)return res.status(400).json({ok:false,error:'battle_price_mismatch'});}
     const result=await economy.debitForGame(user.id,betDls,gameId);
     if (!result.ok) return res.status(400).json({ok:false,error:result.error});
     const serverSeed=crypto.randomBytes(32).toString('hex');
@@ -330,7 +338,6 @@ export function installGameRoutes(app, economy, options = {}) {
       serverSeed,serverSeedHash:commitment,clientSeed,nonce,createdAt:new Date().toISOString(),balanceAfterBet:result.balance};
     if (gameId==='blackjack') { const initial=startBlackjack(round); round.initialResult=initial; }
     if (gameId==='crash') { const rr=rng(serverSeed+':crash'); const x=rr(); round.state={startedAt:Date.now()+5000,crashPoint:x<0.01?1:Number(Math.max(1,0.99/(1-x)).toFixed(2))}; }
-    if (gameId==='case-battles') { const ids=Array.isArray(req.body?.caseIds)?req.body.caseIds.map(String):[String(req.body?.caseId||'')]; round.state={caseIds:ids,caseSnapshots:cs,mode:'house',houseSeed:crypto.randomBytes(16).toString('hex')}; }
     if (gameId==='cases') { const c=caseMap.get(String(req.body?.caseId||'')); const count=Math.max(1,Math.min(4,Number(req.body?.count)||1)); if(!c)return res.status(400).json({ok:false,error:'case_not_found'}); const total=c.price*count; if(Math.abs(total-betDls)>0.01)return res.status(400).json({ok:false,error:'case_price_mismatch'}); round.state={caseId:c.id,count}; }
     if (gameId==='mines') {
       const size=Math.max(5,Math.min(8,Number(req.body?.gridSize)||5)); const total=size*size; const mineCount=Math.max(1,Math.min(total-1,Number(req.body?.mines)||3));
