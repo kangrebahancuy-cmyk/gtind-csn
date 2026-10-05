@@ -277,6 +277,15 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret }) {
     res.json({ok:true,user:publicUser(user)});
   });
 
+  app.post('/api/admin/status', (req,res) => {
+    const admin=requireAdmin(req,res); if(!admin)return;
+    const username=String(req.body?.username||'').trim(); const field=req.body?.field;
+    if(!username || !['isBanned','isMuted'].includes(field)) return res.status(400).json({ok:false,error:'invalid_request'});
+    const db=load(); const user=findUser(db,username); if(!user)return res.status(404).json({ok:false,error:'user_not_found'});
+    user[field]=!Boolean(user[field]); save(db);
+    res.json({ok:true,user:publicUser(user)});
+  });
+
   app.get('/api/admin/users', (req,res) => {
     const admin=requireAdmin(req,res); if(!admin)return;
     const db=load();
