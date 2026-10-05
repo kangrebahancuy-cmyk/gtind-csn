@@ -118,6 +118,7 @@ export function installGameRoutes(app, economy, options = {}) {
     crashGlobal.multiplier=Number(Math.max(1,Math.exp(0.065*((Date.now()-crashGlobal.startedAt)/1000)*1.5)).toFixed(2));
     if(crashGlobal.multiplier>=crashGlobal.crashPoint){crashGlobal.multiplier=crashGlobal.crashPoint;crashGlobal.phase='crashed';crashGlobal.history=[crashGlobal.crashPoint,...crashGlobal.history].slice(0,20);crashGlobal.nextRoundAt=Date.now()+3500;for(const p of crashGlobal.players.values())if(p.status==='active')p.status='busted';persistCrash();}
   }
+  if(crashGlobal.phase==='crashed' && crashGlobal.nextRoundAt>Date.now()) setTimeout(()=>{if(crashGlobal.phase==='crashed')startCrashRound();}, Math.max(0,crashGlobal.nextRoundAt-Date.now()));
   function publicCrashState(){
     return {roundId:crashGlobal.roundId,phase:crashGlobal.phase,countdown:crashGlobal.countdown,currentMultiplier:crashGlobal.multiplier,crashPoint:crashGlobal.phase==='crashed'?crashGlobal.crashPoint:null,serverSeedHash:crashGlobal.serverSeedHash,serverSeed:crashGlobal.phase==='crashed'?crashGlobal.serverSeed:null,history:crashGlobal.history,players:[...crashGlobal.players.values()].map(p=>({username:p.username,status:p.status,amountDls:p.amountDls,autoCashout:p.autoCashout}))};
   }
