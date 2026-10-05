@@ -46,7 +46,6 @@ export const CoinflipGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
   const flipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Restore active streak if page refreshed
   useEffect(() => {
     const saved = localStorage.getItem('voidps_coinflip_state');
     if (saved) {
