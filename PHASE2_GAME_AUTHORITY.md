@@ -45,3 +45,36 @@ Important:
 - Blackjack requires server-owned deck/state/actions.
 - Case Battles requires server-owned lobby, participants, case catalog, RNG, winner and settlement.
 - The current file-backed round/economy store still requires persistent storage and stronger transactional locking before production/high-value use.
+
+
+## Four-game authority hardening
+
+### Blackjack
+- Deck generation and shuffle are server-owned.
+- Player/dealer hands live in the server round state.
+- Hit, stand, and double-down are server actions.
+- Double-down debits the additional stake server-side.
+- Natural blackjack/push settlement is server-side.
+- Client card arrays are display-only.
+
+### Cases
+- Case catalog is server-owned in `data/cases.json`.
+- Admin case changes are sent to the server catalog.
+- Opening a case creates a server round and debits the wager server-side.
+- Item selection uses server-side weighted RNG.
+- Payout uses server-owned item values.
+- Client no longer calls `awardPayout` for a case win.
+- Demo/practice spins remain non-money UI only.
+
+### Case Battles
+- Client-funded joins and client-side payout have been disabled.
+- Demo bot lobby entries have been removed.
+- The current real-money path uses a server-authoritative house battle round; client-side PvP matchmaking is intentionally blocked until a server lobby/join/settlement service is implemented.
+- Client animation must never be treated as the settlement source.
+
+### Crash
+- Bet debit is server-side.
+- Crash point is generated and stored server-side.
+- Cashout is validated against server time and server crash point.
+- Client no longer awards payout or records a loss as the money authority.
+- The server round starts after the same five-second betting window.
