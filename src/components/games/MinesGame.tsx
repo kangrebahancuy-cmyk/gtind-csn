@@ -94,7 +94,7 @@ export const MinesGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     if (!user.isAuthenticated) { setAuthModalOpen(true); return; }
     if (!checkCanPlayGame('mines', 'Mines')) return;
     const b = fromActiveAmount(Number(bet)); if (!b || b <= 0) return;
-    const started = await startGameRound('mines', b);
+    const started = await startGameRound('mines', b, undefined, { gridSize, mines });
     if (!started.success || !started.roundId) return;
     setRoundId(started.roundId); setMineMap([]); setSafe([]); setExplodedTile(null); setResult(null); setCashedOutInfo(null); setRoundBet(b); setPlaying(true);
     safeRef.current=[]; mineMapRef.current=[]; playingRef.current=true;
