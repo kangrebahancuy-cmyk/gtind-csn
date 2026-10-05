@@ -49,26 +49,26 @@ export const AdminModal: React.FC = () => {
       (a.growId && a.growId.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
-  const handleAddBalance = (username: string) => {
+  const handleAddBalance = async (username: string) => {
     const val = parseFloat(balanceAmount);
     if (isNaN(val) || val <= 0) {
       showToast('Please enter a valid amount.', 'error', 'Invalid Amount');
       return;
     }
-    const ok = adminAddBalance(username, val);
+    const ok = await adminAddBalance(username, val);
     if (ok) {
       sound.playCashout();
       showToast(`Added ${val} DLS to ${username}!`, 'success', 'Balance Added');
     }
   };
 
-  const handleRemoveBalance = (username: string) => {
+  const handleRemoveBalance = async (username: string) => {
     const val = parseFloat(balanceAmount);
     if (isNaN(val) || val <= 0) {
       showToast('Please enter a valid amount.', 'error', 'Invalid Amount');
       return;
     }
-    const ok = adminRemoveBalance(username, val);
+    const ok = await adminRemoveBalance(username, val);
     if (ok) {
       sound.playClick();
       showToast(`Deducted ${val} DLS from ${username}!`, 'info', 'Balance Deducted');
