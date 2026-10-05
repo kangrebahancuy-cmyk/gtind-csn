@@ -298,14 +298,17 @@ export const CaseBattlesGame: React.FC<{ onBack: () => void }> = ({ onBack }) =>
   // =========================================================================
   // ACTION: Create & Launch Battle
   // =========================================================================
-  const handleCreateBattle = () => {
+  const handleCreateBattle = async () => {
     if (orderedSelectedCases.length === 0) {
       showToast('Please add at least 1 case for the battle.', 'error', 'No Cases');
       return;
     }
     if (!checkCanPlayGame('casebattles', 'Case Battles')) return;
-    if (!deductBet(totalBattleCost)) return;
-
+    if (totalBattleCost <= 0) return;
+    const start=await fetch('/api/games/start',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({gameId:'case-battles',betDls:totalBattleCost,caseId:orderedSelectedCases[0]?.id})}).then(r=>r.json()).catch(()=>null);
+    if(!start?.ok||!start.roundId){showToast(start?.error||'Server battle unavailable','error','Case Battles');return;}
+    const resolved=await fetch('/api/games/resolve',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({roundId:start.roundId,action:{final:true}})}).then(r=>r.json()).catch(()=>null);
+    if(!resolved?.ok){showToast(resolved?.error||'Battle settlement failed','error','Case Battles');return;}
     sound.playClick();
 
     // Create User Player (Real)
@@ -326,8 +329,8 @@ export const CaseBattlesGame: React.FC<{ onBack: () => void }> = ({ onBack }) =>
       cases: orderedSelectedCases,
       players: [userPlayer],
       totalCostPerPlayer: totalBattleCost,
-      totalPot: totalBattleCost * totalPlayerSlots,
-      status: 'open',
+      totalPot: totalBattleCost * 2,
+      status: 'finished',
       createdAt: Date.now(),
       jackpotMode,
       crazyMode,
@@ -346,14 +349,15 @@ export const CaseBattlesGame: React.FC<{ onBack: () => void }> = ({ onBack }) =>
       return updated;
     });
 
-    showToast('Case Battle created! Waiting for real players to join.', 'success', 'Battle Created');
+    showToast(resolved.result?.outcome==='win' ? 'Server battle won! Settlement completed.' : 'Server battle lost. Settlement completed.', resolved.result?.outcome==='win'?'success':'info', 'Case Battle');
     setView('lobby');
   };
 
   // Join an open battle (Real player)
   const handleJoinBattle = (battle: BattleInstance) => {
-    if (!checkCanPlayGame('casebattles', 'Case Battles')) return;
-    if (!deductBet(battle.totalCostPerPlayer)) return;
+    showToast('Client-side battle joining is disabled until server matchmaking is implemented.', 'warning', 'Server Authority');
+    return;
+    /*
 
     sound.playClick();
 
@@ -389,7 +393,7 @@ export const CaseBattlesGame: React.FC<{ onBack: () => void }> = ({ onBack }) =>
     } else {
       showToast('Joined battle! Waiting for remaining players.', 'success', 'Joined Battle');
     }
-  };
+  }; */
 
   // Cancel an open battle created by the user
   const handleCancelBattle = (battle: BattleInstance) => {
@@ -658,12 +662,7 @@ export const CaseBattlesGame: React.FC<{ onBack: () => void }> = ({ onBack }) =>
       if (!alreadyAwarded) {
         sound.playCashout();
         const mult = battle.totalCostPerPlayer > 0 ? Number((totalLootWon / battle.totalCostPerPlayer).toFixed(2)) : 1;
-        awardPayout(
-          totalLootWon,
-          `Won Case Battle (${battle.cases.length} Rounds)`,
-          mult,
-          battle.totalCostPerPlayer
-        );
+        // Server already settled the real-money payout. Never credit from client state.
         showToast(`🏆 Victory! You won ${totalLootWon} DLS in unboxed items!`, 'success', 'Battle Won!');
         try {
           localStorage.setItem(
