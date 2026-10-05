@@ -866,8 +866,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         wsRef.current = ws;
 
         ws.onmessage = async (event) => {
-          try {
-            const data = JSON.parse(event.data);
+          let data: any;
+          try { data = JSON.parse(event.data); } catch { return; }
             if (data.type === 'INIT_STATE') {
               if (data.payload?.chatHistory && data.payload.chatHistory.length > 0) {
                 setChatMessages(data.payload.chatHistory);
@@ -936,7 +936,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   }
                 } catch {}
               }
-            } catch {}
           };
 
          ws.onclose = () => {
