@@ -79,7 +79,7 @@ export function installGameRoutes(app, economy) {
     if (!SERVER_AUTH_GAMES.has(gameId)) return res.status(409).json({ok:false,error:'game_not_server_authoritative'});
     if (!gameId || !Number.isFinite(betDls) || betDls<=0 || betDls>100000000) return res.status(400).json({ok:false,error:'invalid_bet'});
     if(gameId==='cases'){const c=caseCatalog.get(String(req.body?.caseId||''));const count=Math.max(1,Math.min(4,Number(req.body?.count)||1));if(!c)return res.status(400).json({ok:false,error:'case_not_found'});if(Math.abs(c.price*count-betDls)>0.01)return res.status(400).json({ok:false,error:'case_price_mismatch'});}
-    if(gameId==='case-battles'&&!caseCatalog.has(String(req.body?.caseId||'')))return res.status(400).json({ok:false,error:'case_not_found'});
+    if(gameId==='case-battles'){const c=caseCatalog.get(String(req.body?.caseId||''));if(!c)return res.status(400).json({ok:false,error:'case_not_found'});if(Math.abs(Number(c.price)-betDls)>0.01)return res.status(400).json({ok:false,error:'battle_price_mismatch'});}
     const result=economy.debitForGame(user.id,betDls,gameId);
     if (!result.ok) return res.status(400).json({ok:false,error:result.error});
     const serverSeed=crypto.randomBytes(32).toString('hex');
