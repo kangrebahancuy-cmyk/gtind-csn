@@ -498,6 +498,23 @@ export function resolveGame(gameId, random, action, betDls, state) {
     const multiplier=probability>0?Number((0.98/probability).toFixed(2)):0;
     return {outcome:win?'win':'loss',roll,target,condition,multiplier,payout:win?betDls*multiplier:0};
   }
+  if(gameId==='cases'){
+    const c=state?.caseSnapshot;
+    const count=Math.max(1,Math.min(4,Number(state?.count)||1));
+    if(!c||!Array.isArray(c.items)||!c.items.length)return {outcome:'invalid',payout:0,error:'case_not_found'};
+    const winners=[];
+    let payout=0;
+    for(let n=0;n<count;n++){
+      let x=random()*100, chosen=c.items[c.items.length-1];
+      for(const item of c.items){
+        x-=Math.max(0,Number(item.chance)||0);
+        if(x<=0){chosen=item;break;}
+      }
+      winners.push(chosen);
+      payout+=Math.max(0,Number(chosen.price)||0);
+    }
+    return {outcome:payout>0?'win':'loss',winners,totalPayout:Number(payout.toFixed(2)),payout:Number(payout.toFixed(2)),count};
+  }
   if(gameId==='keno'){
     const picks=Array.isArray(action.picks)?[...new Set(action.picks.map(Number))].filter(n=>Number.isInteger(n)&&n>=1&&n<=40):[];
     const risk=KENO_PAYTABLES[action.risk]?action.risk:'Medium';
