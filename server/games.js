@@ -169,11 +169,6 @@ function resolveGame(gameId,r,action,bet,state) {
     }
     case 'cases': {
       return {outcome:'unsupported',payout:0,error:'case_catalog_must_be_server_owned'};
-      /*
-      const items=Array.isArray(action.items)?action.items:[]; if(!items.length) return {outcome:'loss',payout:0};
-      const total=items.reduce((n,x)=>n+Math.max(0,Number(x.chance||0)),0); let x=r()*total, chosen=items[items.length-1];
-      for(const item of items){x-=Math.max(0,Number(item.chance||0));if(x<=0){chosen=item;break;}}
-      const value=Math.max(0,Number(chosen.valueDls||0)); return {itemId:chosen.id||null,itemValueDls:value,multiplier:bet?value/bet:0,payout:value};
     }
     default: {
       const win=r()>=0.5; return {outcome:win?'win':'loss',multiplier:win?1.9:0,payout:win?bet*1.9:0};
