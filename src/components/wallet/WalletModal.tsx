@@ -117,14 +117,14 @@ export const WalletModal: React.FC = () => {
     }
   };
 
-  const handleTip = () => {
+  const handleTip = async () => {
     const val = parseFloat(tipAmount);
     if (isNaN(val) || val <= 0) {
       setTipMsg({ type: 'error', text: 'Enter a valid amount.' });
       return;
     }
     const dlsVal = fromActiveAmount(val);
-    const res = tip(dlsVal, tipTarget, tipNote);
+    const res = await tip(dlsVal, tipTarget, tipNote);
     if (res.success) {
       setTipMsg({ type: 'success', text: res.message });
       setTipTarget('');
