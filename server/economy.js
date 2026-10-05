@@ -362,14 +362,18 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
     const dls=currency==='BGL'?amount*100:currency==='WL'?amount/100:amount;
     const db=load(); const fresh=db.users.find(u=>u.id===user.id);
     if(!fresh || fresh.balanceDls<dls) return res.status(400).json({ok:false,error:'insufficient_balance'});
+    if(!rateLimit(`withdraw:${user.id}`,5,60000)) return res.status(429).json({ok:false,error:'rate_limited'});
+    const idempotencyKey=String(req.headers['idempotency-key']||'').trim().slice(0,128);
+    const preflight=load();
+    if(idempotencyKey){ const prior=preflight.withdrawals.find(x=>x.userId===user.id&&x.idempotencyKey===idempotencyKey); if(prior) return res.json({ok:true,status:prior.status,withdrawalId:prior.id,user:publicUser(preflight.users.find(x=>x.id===user.id)),duplicate:true}); }
     const withdrawalId=id('wd');
     mutateBalance(db,fresh,-dls,'WITHDRAW_PENDING',withdrawalId,{growId,currency,amount});
-    const withdrawal={id:withdrawalId,userId:fresh.id,username:fresh.username,growId,currency,amount,amountDls:dls,status:'PENDING',createdAt:now()};
+    const withdrawal={id:withdrawalId,userId:fresh.id,username:fresh.username,growId,currency,amount,amountDls:dls,status:'PENDING',idempotencyKey:idempotencyKey||null,createdAt:now()};
     db.withdrawals.push(withdrawal); save(db);
     try {
       const bridgeRes=await fetch(`${gtpsBridgeUrl}/supreme/withdraw`,{
         method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({secretKey:getGtpsSecret(),growId,currency,amount})
+        body:JSON.stringify({secretKey:getGtpsSecret(),withdrawalId,growId,currency,amount})
       });
       const data=await bridgeRes.json().catch(()=>({ok:false,error:'bridge_invalid_response'}));
       const latest=load(); const w=latest.withdrawals.find(x=>x.id===withdrawalId); const u=latest.users.find(x=>x.id===fresh.id);
@@ -382,10 +386,10 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
       if(w) w.status='COMPLETED'; save(latest);
       res.json({ok:true,status:'COMPLETED',withdrawalId,user:publicUser(u)});
     } catch {
-      const latest=load(); const w=latest.withdrawals.find(x=>x.id===withdrawalId); const u=latest.users.find(x=>x.id===fresh.id);
-      if(u) mutateBalance(latest,u,dls,'WITHDRAW_REFUND',withdrawalId,{reason:'bridge_unreachable'});
-      if(w) w.status='FAILED'; save(latest);
-      res.status(502).json({ok:false,error:'bridge_unreachable'});
+      const latest=load(); const w=latest.withdrawals.find(x=>x.id===withdrawalId);
+      if(w) { w.status='UNKNOWN'; w.error='bridge_response_unavailable'; w.lastCheckedAt=now(); }
+      save(latest);
+      res.status(202).json({ok:false,status:'UNKNOWN',withdrawalId,error:'withdrawal_requires_reconciliation'});
     }
   });
 
