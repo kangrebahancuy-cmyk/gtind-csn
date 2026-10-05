@@ -55,11 +55,9 @@ const distPath = path.join(__dirname, 'dist');
 app.use(express.static(distPath));
 
 // In-memory real-time state for live chat & bets & GTPS
-const MAX_HISTORY = 100;
-const liveChatHistory = [];
+const liveBetsHistory = [];
 const stopChatRetentionWorker = startChatRetentionWorker();
 const saveEphemeralChatFromWebSocket = async (user, text) => saveChatMessage({ userId:user.id, username:user.username, message:text });
-const liveBetsHistory = [];
 const activeBattles = [];
 
 const gtpsConfig = {
