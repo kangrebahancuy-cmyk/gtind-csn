@@ -28,6 +28,7 @@ caseBattles:[[{id:1},{unique:true,name:'uniq_case_battle_id'}],[{status:1,create
 crashRounds:[[{id:1},{unique:true,name:'uniq_crash_round_id'}],[{phase:1},{name:'idx_crash_phase'}]],
 crashPlayers:[[{roundId:1,userId:1},{unique:true,name:'uniq_crash_round_player'}]],
 auditLogs:[[{id:1},{unique:true,name:'uniq_audit_id'}],[{actorUserId:1,createdAt:-1},{name:'idx_audit_actor_created'}]],
+rateLimits:[[{key:1},{unique:true,name:'uniq_rate_limit_key'}],[{expiresAt:1},{expireAfterSeconds:0,name:'ttl_rate_limits'}]],
 realtimeEvents:[[{id:1},{unique:true,name:'uniq_realtime_event_id'}],[{createdAt:-1},{name:'idx_realtime_created'}]]
 };
 export async function ensureMongoSchema(){
