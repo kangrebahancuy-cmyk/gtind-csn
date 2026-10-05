@@ -112,7 +112,7 @@ interface GameContextType {
   deductBet: (dlsAmount: number) => boolean;
   awardPayout: (dlsPayout: number, gameName: string, multiplier: number, betDls: number) => void;
   recordLoss: (betDls: number, gameName: string) => void;
-  startGameRound: (gameId: string, betDls: number, clientSeed?: string) => Promise<{ success:boolean; roundId?:string; serverSeedHash?:string; message?:string; balanceDls?:number }>;
+  startGameRound: (gameId: string, betDls: number, clientSeed?: string, options?: Record<string, unknown>) => Promise<{ success:boolean; roundId?:string; serverSeedHash?:string; message?:string; balanceDls?:number }>;
   resolveGameRound: (roundId: string, action: Record<string, unknown>) => Promise<{ success:boolean; result?:any; payoutDls?:number; balanceDls?:number; finished?:boolean; serverSeed?:string; serverSeedHash?:string; message?:string }>;
 
   // Live Bets
@@ -618,10 +618,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, 2500);
   };
 
-  const startGameRound = async (gameId: string, betDls: number, clientSeed?: string) => {
+  const startGameRound = async (gameId: string, betDls: number, clientSeed?: string, options: Record<string, unknown> = {}) => {
     if (!currentUserRef.current) return {success:false,message:'Please Sign In first.'};
     try {
-      const {response,data}=await apiJson('/api/games/start',{method:'POST',body:JSON.stringify({gameId,betDls,clientSeed})});
+      const {response,data}=await apiJson('/api/games/start',{method:'POST',body:JSON.stringify({gameId,betDls,clientSeed,...options})});
       if(!response.ok) return {success:false,message:data.error||'Unable to start game.'};
       if(data.balanceDls !== undefined){
         const u={...currentUserRef.current,balanceDls:Number(data.balanceDls)};
