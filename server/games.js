@@ -116,7 +116,7 @@ export function installGameRoutes(app, economy) {
     const result=round.gameId==='blackjack' ? (action.type==='initial' ? (()=>{const p=round.state.player,d=round.state.dealer;const ps=blackjackScore(p),ds=blackjackScore(d);if(ps===21){round.state.phase='finished';return {outcome:ds===21?'push':'win',player:p,dealer:d,payout:ds===21?round.betDls:round.betDls*2.5,score:ps,dealerScore:ds};}return {outcome:'continue',player:p,dealer:[d[0]],payout:0,score:ps,dealerScore:blackjackScore([d[0]])};})() : resolveBlackjack(round,action) : (round.gameId==='crash' ? resolveCrash(round,action) : (round.gameId==='case-battles' ? resolveCaseBattle(round,random,action) : ((round.gameId==='coinflip' && action.cashout===true) ? resolveCashout(round, action) : resolveGame(round.gameId,random,action,round.betDls,round.state))));
     const payout=Number((result.payout||0).toFixed(2));
     if (payout < 0 || payout > round.betDls * 100000) return res.status(400).json({ok:false,error:'invalid_payout'});
-    const shouldCredit=(round.gameId==='blackjack' ? result.outcome!=='continue' : (round.gameId==='crash' ? action.type==='cashout' || result.outcome==='loss' : (action.cashout===true || action.final===true || !['coinflip'].includes(round.gameId))));
+    const shouldCredit=(round.gameId==='blackjack' ? result.outcome!=='continue' : (round.gameId==='crash' ? action.type==='cashout' || action.type==='cancel' || result.outcome==='loss' : (action.cashout===true || action.final===true || !['coinflip'].includes(round.gameId))));
     let credit={ok:true,balance:round.balanceAfterBet};
     if(shouldCredit){
       credit=economy.creditGameResult(user.id,payout,round);
