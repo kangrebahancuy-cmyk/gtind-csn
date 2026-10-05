@@ -225,29 +225,19 @@ export function installWalletRoutes(app,{sessionUser,getGtpsSecret,gtpsBridgeUrl
           if(prior)return {duplicate:true,withdrawal:prior};
         }
         const fresh=await db.collection('users').findOne({id:user.id},{session});
-        const r=await mutateCurrency(session,db,{userId:user.id,username:fresh.username,type:'WITHDRAW_PENDING',currency,amountWl:-amountWl,referenceId:withdrawalId,metadata:{growId,currency,amount:wlToCurrencyAmount(currency,amountWl)}});
+        if(!fresh?.gtpsLinked||String(fresh.growId||'').toLowerCase()!==growId.toLowerCase())return {error:'growid_not_linked'};
+        const r=await mutateCurrency(session,db,{userId:user.id,username:fresh.username,type:'WITHDRAW_PENDING',currency,amountWl:-amountWl,referenceId:withdrawalId,metadata:{growId,currency,amount:wlToCurrencyAmount(currency,amountWl),settlement:'gtps_queue'}});
         const withdrawal={id:withdrawalId,userId:user.id,username:fresh.username,growId,currency,amount:wlToCurrencyAmount(currency,amountWl),amountWl,status:'PENDING',idempotencyKey:idempotencyKey||null,createdAt:new Date()};
         await db.collection('withdrawals').insertOne(withdrawal,{session});
         return {withdrawal,r};
       });
+      if(reserved.error==='growid_not_linked')return res.status(400).json({ok:false,error:reserved.error});
       if(reserved.duplicate)return res.json({ok:true,duplicate:true,status:reserved.withdrawal.status,withdrawalId:reserved.withdrawal.id,wallet:await getWallet(user.id)});
-      const bridgeRes=await fetch(`${gtpsBridgeUrl}/supreme/withdraw`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({secretKey:getGtpsSecret(),withdrawalId,growId,currency,amount:wlToCurrencyAmount(currency,amountWl)})});
-      const data=await bridgeRes.json().catch(()=>({ok:false,error:'bridge_invalid_response'}));
-      if(!data.ok){
-        await withMongoTransaction(async(session,db)=>{
-          const w=await db.collection('withdrawals').findOne({id:withdrawalId},{session});
-          if(!w||w.status!=='PENDING')return;
-          const fresh=await db.collection('users').findOne({id:user.id},{session});
-          await mutateCurrency(session,db,{userId:user.id,username:fresh.username,type:'WITHDRAW_REFUND',currency,amountWl,referenceId:withdrawalId,metadata:{reason:data.error||'bridge_rejected'}});
-          await db.collection('withdrawals').updateOne({id:withdrawalId,status:'PENDING'},{$set:{status:'FAILED',error:data.error||'bridge_rejected',updatedAt:new Date()}},{session});
-        });
-        return res.status(bridgeRes.status||502).json({ok:false,error:data.error||'withdraw_failed'});
-      }
-      await getMongoDb().then(db=>db.collection('withdrawals').updateOne({id:withdrawalId,status:'PENDING'},{$set:{status:'COMPLETED',updatedAt:new Date()}}));
-      res.json({ok:true,status:'COMPLETED',withdrawalId,wallet:await getWallet(user.id)});
+      res.status(202).json({ok:true,status:'PENDING',withdrawalId,wallet:await getWallet(user.id),settlement:'gtps_poll'});
     }catch(error){
       if(error.code==='INSUFFICIENT_BALANCE')return res.status(400).json({ok:false,error:'insufficient_balance'});
       if(error.code==='WALLET_WRITE_CONFLICT')return res.status(409).json({ok:false,error:'wallet_write_conflict'});
+      console.error('[gtps-withdraw]',error);
       res.status(500).json({ok:false,error:'withdrawal_failed'});
     }
   });

@@ -11,6 +11,7 @@ import { installGameRoutes } from './server/games.js';
 import { installProgressionRoutes } from './server/progression.js';
 import { installChatRoutes, startChatRetentionWorker, saveChatMessage } from './server/social.js';
 import { installAdminRoutes } from './server/admin.js';
+import { installGtpsRoutes } from './server/gtps.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -72,16 +73,9 @@ const gtpsConfig = {
 const GTPS_BRIDGE_PORT = process.env.GTPS_PORT || 18876;
 const GTPS_BRIDGE_URL = `https://api.gtps.cloud/g-api/${GTPS_BRIDGE_PORT}`;
 
-// GTPS API Endpoints
-app.get('/api/gtps/status', (req, res) => {
-  res.json({
-    status: gtpsConfig.status,
-    syncCount: gtpsConfig.activeSyncCount,
-  });
-});
-
 installProgressionRoutes(app, { sessionUser });
 installAdminRoutes(app, { sessionUser });
+installGtpsRoutes(app, { getGtpsSecret: () => gtpsConfig.secretKey });
 
 installChatRoutes(app, { sessionUser, broadcast });
 
