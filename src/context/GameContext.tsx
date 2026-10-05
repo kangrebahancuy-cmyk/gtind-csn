@@ -936,6 +936,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   }
                 } catch {}
               }
+            } catch {}
           };
 
          ws.onclose = () => {
