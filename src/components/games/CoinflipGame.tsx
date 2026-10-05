@@ -19,6 +19,8 @@ export const CoinflipGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     setAuthModalOpen,
     setActiveGameSession,
     checkCanPlayGame,
+    startGameRound,
+    resolveGameRound,
   } = useGame();
 
   const [betMode, setBetMode] = useState<'manual' | 'auto'>('manual');
@@ -36,6 +38,7 @@ export const CoinflipGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [originalBet, setOriginalBet] = useState(0);
   const [currentPot, setCurrentPot] = useState(0);
   const [deadStep, setDeadStep] = useState<number | null>(null);
+  const [serverRoundId, setServerRoundId] = useState<string | null>(null);
 
   // 3D Coin Rotation state
   const [coinRotation, setCoinRotation] = useState(0);
@@ -66,127 +69,114 @@ export const CoinflipGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     };
   }, []);
 
-  const flip = (overrideSide?: 'heads' | 'tails') => {
-    if (!user.isAuthenticated) {
-      setAuthModalOpen(true);
-      return;
-    }
-
-    if (!roundActive && !checkCanPlayGame('coinflip', 'Coinflip')) {
-      return;
-    }
-
+  const flip = async (overrideSide?: 'heads' | 'tails') => {
+    if (!user.isAuthenticated) { setAuthModalOpen(true); return; }
+    if (!roundActive && !checkCanPlayGame('coinflip', 'Coinflip')) return;
     if (flipping) return;
 
     const chosenSide = overrideSide ?? side;
     setSide(chosenSide);
 
-    let activePath = roundPath;
     let baseBetDls = originalBet;
     let currentStep = streak;
 
     if (!roundActive) {
       const b = fromActiveAmount(Number(bet));
-      if (!b || b <= 0 || !deductBet(b)) return;
+      if (!b || b <= 0) return;
+      const started = await startGameRound('coinflip', b);
+      if (!started.success || !started.roundId) {
+        showToast(started.message || 'Unable to start round.', 'error', 'Coinflip');
+        return;
+      }
       baseBetDls = b;
+      currentStep = 0;
       setOriginalBet(b);
       setRoundActive(true);
-      currentStep = 0;
       setStreak(0);
       setDeadStep(null);
-      // Pre-generate the 9 steps for this round
-      activePath = Array.from({ length: TOTAL_STEPS }, () => (Math.random() < 0.5 ? 'heads' : 'tails'));
-      setRoundPath(activePath);
+      setServerRoundId(started.roundId);
     }
 
-    sound.playClick();
-    sound.playFlip();
-    sound.playCoinSpin();
+    const roundId = serverRoundId || (await startGameRound('coinflip', baseBetDls)).roundId;
+    if (!roundId) return;
 
     setFlipping(true);
     setResult(null);
     setWon(null);
     setCashedOutInfo(null);
+    sound.playClick(); sound.playFlip(); sound.playCoinSpin();
 
-    // Outcome is determined by the path at current step
-    const outcome = activePath[currentStep];
-
-    // Continuous 3D forward spin in place
-    const baseSpins = 6 + Math.floor(Math.random() * 2);
-    const minTarget = coinRotation + baseSpins * 360;
-    let targetAngle: number;
-
-    if (outcome === 'heads') {
-      targetAngle = Math.ceil(minTarget / 360) * 360;
-    } else {
-      targetAngle = Math.floor(minTarget / 360) * 360 + 180;
-      if (targetAngle < minTarget) targetAngle += 360;
+    const resolved = await resolveGameRound(roundId, { choice: chosenSide, step: currentStep, final: false });
+    if (!resolved.success || !resolved.result) {
+      setFlipping(false);
+      showToast(resolved.message || 'Unable to resolve round.', 'error', 'Coinflip');
+      return;
     }
 
+    const outcome = resolved.result.winningSide as 'heads' | 'tails';
+    const isWin = resolved.result.outcome === 'win';
+    const baseSpins = 6 + Math.floor(Math.random() * 2);
+    const minTarget = coinRotation + baseSpins * 360;
+    const targetAngle = outcome === 'heads'
+      ? Math.ceil(minTarget / 360) * 360
+      : Math.floor(minTarget / 360) * 360 + 180;
     setCoinRotation(targetAngle);
 
-    // Landing at 1.8s
     flipTimeoutRef.current = setTimeout(() => {
-      const isWin = outcome === chosenSide;
       setResult(outcome);
       setWon(isWin);
       setFlipping(false);
       sound.playCoinLand(isWin);
 
-      if (isWin) {
-        const nextStreak = currentStep + 1;
-        setStreak(nextStreak);
-        const multiplier = MULTIPLIERS[nextStreak - 1];
-        const newPot = baseBetDls * multiplier;
-        setCurrentPot(newPot);
-        sound.playCashout();
-
-        if (nextStreak >= TOTAL_STEPS) {
-          // Reached all 9 steps! Full win
-          awardPayout(newPot, 'Coinflip', multiplier, baseBetDls);
-          setCashedOutInfo({ multiplier, payout: newPot });
-          setRoundActive(false);
-          sound.playWin();
-          setActiveGameSession(null);
-          localStorage.removeItem('voidps_coinflip_state');
-        } else {
-          setActiveGameSession({ gameId: 'coinflip', gameTitle: 'Coinflip' });
-          localStorage.setItem(
-            'voidps_coinflip_state',
-            JSON.stringify({
-              streak: nextStreak,
-              roundActive: true,
-              originalBet: baseBetDls,
-              currentPot: newPot,
-              roundPath: activePath,
-            })
-          );
-        }
-      } else {
-        // Player died! Set dead step and reveal the full path so player sees the process
+      if (!isWin) {
         setDeadStep(currentStep);
-        recordLoss(baseBetDls, 'Coinflip');
         setRoundActive(false);
+        setStreak(0);
+        setServerRoundId(null);
         sound.playExplosion();
         setActiveGameSession(null);
         localStorage.removeItem('voidps_coinflip_state');
+        return;
+      }
+
+      const nextStreak = currentStep + 1;
+      const multiplier = MULTIPLIERS[Math.min(nextStreak - 1, MULTIPLIERS.length - 1)];
+      const newPot = baseBetDls * multiplier;
+      setStreak(nextStreak);
+      setCurrentPot(newPot);
+      sound.playCashout();
+
+      if (nextStreak >= TOTAL_STEPS) {
+        resolveGameRound(roundId, { choice: chosenSide, step: nextStreak, final: true }).then((finalResult) => {
+          if (finalResult.success) {
+            setCashedOutInfo({ multiplier, payout: finalResult.payoutDls || newPot });
+            sound.playWin();
+          }
+        });
+        setRoundActive(false);
+        setServerRoundId(null);
+        setActiveGameSession(null);
+        localStorage.removeItem('voidps_coinflip_state');
+      } else {
+        setActiveGameSession({ gameId: 'coinflip', gameTitle: 'Coinflip' });
       }
     }, 1800);
   };
 
   // Cashout button handler
-  const handleCashout = () => {
-    if (flipping || !roundActive || currentPot <= 0) return;
-    sound.playClick();
-    sound.playCashout();
-    sound.playWin();
-
-    const multiplier = streak > 0 ? MULTIPLIERS[streak - 1] : 1.0;
-    awardPayout(currentPot, 'Coinflip', multiplier, originalBet);
-    setCashedOutInfo({ multiplier, payout: currentPot });
-
+  const handleCashout = async () => {
+    if (flipping || !roundActive || currentPot <= 0 || !serverRoundId) return;
+    sound.playClick(); sound.playCashout(); sound.playWin();
+    const multiplier = streak > 0 ? MULTIPLIERS[streak - 1] : 1;
+    const resolved = await resolveGameRound(serverRoundId, { cashout:true, step:streak, final:true });
+    if (!resolved.success) {
+      showToast(resolved.message || 'Cashout failed.', 'error', 'Coinflip');
+      return;
+    }
+    setCashedOutInfo({ multiplier, payout: resolved.payoutDls || currentPot });
     setRoundActive(false);
     setWon(true);
+    setServerRoundId(null);
     setActiveGameSession(null);
     localStorage.removeItem('voidps_coinflip_state');
   };
