@@ -23,6 +23,7 @@ deposits:[[{transactionId:1},{unique:true,name:'uniq_deposit_transaction'}],[{us
 withdrawals:[[{id:1},{unique:true,name:'uniq_withdrawal_id'}],[{userId:1,idempotencyKey:1},{unique:true,name:'uniq_withdrawal_idempotency_v2',partialFilterExpression:{idempotencyKey:{$type:'string'}}}],[{status:1,createdAt:1},{name:'idx_withdrawal_status_created'}]],
 gameRounds:[[{id:1},{unique:true,name:'uniq_game_round_id'}],[{userId:1,createdAt:-1},{name:'idx_game_round_user_created'}]],
 caseCatalog:[[{id:1},{unique:true,name:'uniq_case_id'}]],
+leases:[[{_id:1},{unique:true,name:'uniq_lease_id'}]],
 caseBattles:[[{id:1},{unique:true,name:'uniq_case_battle_id'}],[{status:1,createdAt:-1},{name:'idx_case_battle_lobby'}]],
 crashRounds:[[{id:1},{unique:true,name:'uniq_crash_round_id'}],[{phase:1},{name:'idx_crash_phase'}]],
 crashPlayers:[[{roundId:1,userId:1},{unique:true,name:'uniq_crash_round_player'}]],
