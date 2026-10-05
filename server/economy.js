@@ -417,7 +417,7 @@ export function installEconomyRoutes(app, { gtpsBridgeUrl, getGtpsSecret, broadc
       mongo.collection('ledger').find({},{projection:{_id:0,userId:1,amountDls:1}}).toArray()
     ]);
     const sums=new Map();
-    for(const row of ledger) sums.set(String(row.userId),(sums.get(String(row.userId))||0)+Number(row.amountDls||0);
+    for(const row of ledger) sums.set(String(row.userId),(sums.get(String(row.userId))||0)+Number(row.amountDls||0));
     const discrepancies=[];
     for(const wallet of wallets){
       const actual=Number(wallet.balanceDls||0);
