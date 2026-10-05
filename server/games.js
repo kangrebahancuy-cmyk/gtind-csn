@@ -89,7 +89,7 @@ export function installGameRoutes(app, economy) {
     const round={id:id(),userId:user.id,username:user.username,gameId,betDls,status:'ACTIVE',
       serverSeed,serverSeedHash:commitment,clientSeed,nonce,createdAt:new Date().toISOString(),balanceAfterBet:result.balance};
     if (gameId==='blackjack') { const initial=startBlackjack(round); round.initialResult=initial; }
-    if (gameId==='crash') { const rr=rng(serverSeed+':crash'); const x=rr(); round.state={startedAt:Date.now(),crashPoint:x<0.01?1:Number(Math.max(1,0.99/(1-x)).toFixed(2))}; }
+    if (gameId==='crash') { const rr=rng(serverSeed+':crash'); const x=rr(); round.state={startedAt:Date.now()+5000,crashPoint:x<0.01?1:Number(Math.max(1,0.99/(1-x)).toFixed(2))}; }
     if (gameId==='case-battles') { const caseId=String(req.body?.caseId||''); const c=caseCatalog.get(caseId); if(!c)return res.status(400).json({ok:false,error:'case_not_found'}); round.state={caseId:c.id,mode:'house',houseSeed:crypto.randomBytes(16).toString('hex')}; }
     if (gameId==='cases') { const c=caseCatalog.get(String(req.body?.caseId||'')); const count=Math.max(1,Math.min(4,Number(req.body?.count)||1)); if(!c)return res.status(400).json({ok:false,error:'case_not_found'}); const total=c.price*count; if(Math.abs(total-betDls)>0.01)return res.status(400).json({ok:false,error:'case_price_mismatch'}); round.state={caseId:c.id,count}; }
     if (gameId==='mines') {
