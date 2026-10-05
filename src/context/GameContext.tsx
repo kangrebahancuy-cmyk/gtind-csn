@@ -197,6 +197,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    if (!currentUser?.isAdmin) return;
+    apiJson('/api/admin/users').then(({ data }) => {
+      if (Array.isArray(data?.users)) setAccounts(data.users);
+    }).catch(() => {});
+  }, [currentUser?.isAdmin]);
+
   const [gtpsPort, setGtpsPortState] = useState<number>(() => {
     const saved = localStorage.getItem('supreme_gtps_port');
     return saved ? parseInt(saved, 10) || 25741 : 25741;
