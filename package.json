@@ -10,7 +10,8 @@
     "start": "node server.js",
     "test": "node --test tests/*.test.mjs",
     "mongo:init": "node scripts/mongo-init.mjs",
-    "mongo:migrate": "node scripts/mongo-migrate-json.mjs"
+    "mongo:migrate": "node scripts/mongo-migrate-json.mjs",
+    "sqlite:init": "node scripts/sqlite-init.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -19,8 +20,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tailwind-merge": "^3.0.2",
-    "ws": "^8.22.0",
-    "mongodb": "^7.7.0"
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
