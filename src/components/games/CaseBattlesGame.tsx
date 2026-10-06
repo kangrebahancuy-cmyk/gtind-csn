@@ -78,50 +78,7 @@ export const STARTER_BATTLE_CASES: CustomCase[] = [
   },
 ];
 
-export const STARTER_LOBBY_BATTLES: BattleInstance[] = [
-  {
-    id: 'battle_demo_1',
-    mode: 'normal',
-    playerConfig: '1v1',
-    cases: [STARTER_BATTLE_CASES[0], STARTER_BATTLE_CASES[0]],
-    players: [
-      {
-        id: 'bot_vortex',
-        name: 'VortexBot 🤖',
-        avatar: '🤖',
-        isBot: true,
-        isUser: false,
-        unboxedItems: [],
-        totalValue: 0,
-      },
-    ],
-    totalCostPerPlayer: 20,
-    totalPot: 40,
-    status: 'open',
-    createdAt: Date.now() - 60000,
-  },
-  {
-    id: 'battle_demo_2',
-    mode: 'normal',
-    playerConfig: '1v1',
-    cases: [STARTER_BATTLE_CASES[1]],
-    players: [
-      {
-        id: 'bot_growking',
-        name: 'GrowKing 🤖',
-        avatar: '👑',
-        isBot: true,
-        isUser: false,
-        unboxedItems: [],
-        totalValue: 0,
-      },
-    ],
-    totalCostPerPlayer: 50,
-    totalPot: 100,
-    status: 'open',
-    createdAt: Date.now() - 120000,
-  },
-];
+export const STARTER_LOBBY_BATTLES: BattleInstance[] = [];
 
 export interface BattlePlayer {
   id: string;
@@ -298,111 +255,110 @@ export const CaseBattlesGame: React.FC<{ onBack: () => void }> = ({ onBack }) =>
   // =========================================================================
   // ACTION: Create & Launch Battle
   // =========================================================================
-  const handleCreateBattle = () => {
+  const serverBattleToUi = (b: any): BattleInstance => ({
+    id: String(b.id),
+    mode: (b.mode || 'normal') as BattleMode,
+    playerConfig: (b.playerConfig || '1v1') as PlayerConfig,
+    cases: (b.caseIds || []).map((id: string) => availableCases.find(c => c.id === id)).filter(Boolean) as CustomCase[],
+    players: (b.players || []).map((p: any) => ({
+      id: String(p.userId || p.username),
+      name: String(p.username),
+      avatar: '👤',
+      isBot: false,
+      isUser: String(p.userId) === String(user.id),
+      unboxedItems: [],
+      totalValue: 0,
+    })),
+    totalCostPerPlayer: Number(b.totalCostPerPlayer || 0),
+    totalPot: Number(b.totalPot || 0),
+    status: b.status === 'finished' ? 'finished' : b.status === 'in-progress' ? 'in-progress' : 'open',
+    createdAt: Number(b.createdAt || Date.now()),
+  });
+
+  useEffect(() => {
+    if (view !== 'lobby') return;
+    let stopped = false;
+    const refresh = async () => {
+      const data = await fetch('/api/games/case-battles/lobby', { credentials: 'include' }).then(r => r.json()).catch(() => null);
+      if (stopped || !data?.ok || !Array.isArray(data.battles)) return;
+      setBattles(data.battles.map(serverBattleToUi));
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 3000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [view, availableCases]);
+
+  const handleCreateBattle = async () => {
     if (orderedSelectedCases.length === 0) {
       showToast('Please add at least 1 case for the battle.', 'error', 'No Cases');
       return;
     }
     if (!checkCanPlayGame('casebattles', 'Case Battles')) return;
-    if (!deductBet(totalBattleCost)) return;
-
+    if (createConfig !== '1v1') {
+      showToast('Server PvP saat ini hanya mendukung 1v1.', 'warning', 'Case Battles');
+      return;
+    }
+    const response = await fetch('/api/games/case-battles/create', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: crazyMode ? 'crazy' : createMode,
+        playerConfig: createConfig,
+        caseIds: orderedSelectedCases.map(c => c.id),
+      }),
+    }).then(r => r.json()).catch(() => null);
+    if (!response?.ok || !response.battle) {
+      showToast(response?.error || 'Server battle unavailable', 'error', 'Case Battles');
+      return;
+    }
+    const uiBattle = serverBattleToUi(response.battle);
+    setBattles(prev => [uiBattle, ...prev.filter(b => b.id !== uiBattle.id)]);
     sound.playClick();
-
-    // Create User Player (Real)
-    const userPlayer: BattlePlayer = {
-      id: user.username || 'You',
-      name: user.username || 'You',
-      avatar: '👤',
-      isBot: false,
-      isUser: true,
-      unboxedItems: [],
-      totalValue: 0,
-    };
-
-    const newBattle: BattleInstance = {
-      id: `battle_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      mode: crazyMode ? 'crazy' : createMode,
-      playerConfig: createConfig,
-      cases: orderedSelectedCases,
-      players: [userPlayer],
-      totalCostPerPlayer: totalBattleCost,
-      totalPot: totalBattleCost * totalPlayerSlots,
-      status: 'open',
-      createdAt: Date.now(),
-      jackpotMode,
-      crazyMode,
-      terminalMode,
-      biggestPull,
-      fastSpin: fastSpinMode,
-      bigPullAnimation,
-      isPrivate: privateMode,
-    };
-
-    setBattles((prev) => {
-      const updated = [newBattle, ...prev];
-      try {
-        localStorage.setItem('supreme_case_battles', JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
-
-    showToast('Case Battle created! Waiting for real players to join.', 'success', 'Battle Created');
+    showToast('Battle dibuat. Menunggu player lain...', 'success', 'Case Battle PvP');
     setView('lobby');
   };
 
-  // Join an open battle (Real player)
-  const handleJoinBattle = (battle: BattleInstance) => {
-    if (!checkCanPlayGame('casebattles', 'Case Battles')) return;
-    if (!deductBet(battle.totalCostPerPlayer)) return;
-
+  // Join an open battle (server-authoritative PvP)
+  const handleJoinBattle = async (battle: BattleInstance) => {
+    if (battle.status !== 'open') return;
+    const response = await fetch('/api/games/case-battles/join', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ battleId: battle.id }),
+    }).then(r => r.json()).catch(() => null);
+    if (!response?.ok) {
+      showToast(response?.error || 'Unable to join battle', 'error', 'Case Battle PvP');
+      return;
+    }
     sound.playClick();
-
-    const userPlayer: BattlePlayer = {
-      id: user.username || 'Player 2',
-      name: user.username || 'Player 2',
-      avatar: '👤',
-      isBot: false,
-      isUser: true,
-      unboxedItems: [],
-      totalValue: 0,
-    };
-
-    const updatedPlayers = [...battle.players, userPlayer];
-    const isFull = updatedPlayers.length >= (battle.playerConfig === '1v1' ? 2 : 3);
-
-    const updatedBattle: BattleInstance = {
-      ...battle,
-      players: updatedPlayers,
-      status: isFull ? 'in-progress' : 'open',
-    };
-
-    setBattles((prev) => {
-      const updated = prev.map((b) => (b.id === battle.id ? updatedBattle : b));
-      try {
-        localStorage.setItem('supreme_case_battles', JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
-
-    if (isFull) {
-      startArenaBattle(updatedBattle);
+    const finished = response.battle ? serverBattleToUi(response.battle) : battle;
+    setBattles(prev => prev.map(b => b.id === battle.id ? finished : b));
+    const result = response.result;
+    if (result?.outcome === 'draw') {
+      showToast('Draw — both players were refunded.', 'info', 'Case Battle PvP');
+    } else if (result?.winnerUsername === user.username) {
+      showToast('You won the PvP battle. Server settlement completed.', 'success', 'Case Battle PvP');
     } else {
-      showToast('Joined battle! Waiting for remaining players.', 'success', 'Joined Battle');
+      showToast(`You lost to ${result?.winnerUsername || 'the opponent'}.`, 'info', 'Case Battle PvP');
     }
   };
 
   // Cancel an open battle created by the user
-  const handleCancelBattle = (battle: BattleInstance) => {
-    sound.playClick();
-    awardPayout(battle.totalCostPerPlayer, 'Cancelled Case Battle', 1, battle.totalCostPerPlayer);
-    setBattles((prev) => {
-      const updated = prev.filter((b) => b.id !== battle.id);
-      try {
-        localStorage.setItem('supreme_case_battles', JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
-    showToast('Battle cancelled and bet refunded.', 'info', 'Battle Cancelled');
+  const handleCancelBattle = async (battle: BattleInstance) => {
+    const response = await fetch('/api/games/case-battles/cancel', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ battleId: battle.id }),
+    }).then(r => r.json()).catch(() => null);
+    if (!response?.ok) {
+      showToast(response?.error || 'Unable to cancel battle', 'error', 'Case Battle PvP');
+      return;
+    }
+    setBattles(prev => prev.filter(b => b.id !== battle.id));
+    showToast('Battle cancelled and stake refunded by server.', 'info', 'Battle Cancelled');
   };
 
   // Call bots to immediately fill empty slots and start battle
@@ -658,12 +614,7 @@ export const CaseBattlesGame: React.FC<{ onBack: () => void }> = ({ onBack }) =>
       if (!alreadyAwarded) {
         sound.playCashout();
         const mult = battle.totalCostPerPlayer > 0 ? Number((totalLootWon / battle.totalCostPerPlayer).toFixed(2)) : 1;
-        awardPayout(
-          totalLootWon,
-          `Won Case Battle (${battle.cases.length} Rounds)`,
-          mult,
-          battle.totalCostPerPlayer
-        );
+        // Server already settled the real-money payout. Never credit from client state.
         showToast(`🏆 Victory! You won ${totalLootWon} DLS in unboxed items!`, 'success', 'Battle Won!');
         try {
           localStorage.setItem(

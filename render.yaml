@@ -3,10 +3,23 @@ services:
     name: supreme-casino
     runtime: node
     plan: free
+    healthCheckPath: /healthz
     buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 10000
+      # node:sqlite (dipakai server/economy-store.js & server/mongo-store.js) butuh Node 22.5+; stabil di 24
+      - key: NODE_VERSION
+        value: "24"
+      - key: SQLITE_DB_PATH
+        value: ./data/gtind-csn.sqlite
+      - key: SQLITE_DATA_DIR
+        value: ./data
+      # sync: false = Render minta nilai ini diisi manual saat pertama apply Blueprint
+      - key: GTPS_WEBHOOK_SECRET
+        sync: false
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false

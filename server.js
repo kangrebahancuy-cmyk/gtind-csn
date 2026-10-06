@@ -1,8 +1,17 @@
 import express from 'express';
 import http from 'http';
+import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
+import { installEconomyRoutes, sessionUser } from './server/economy.js';
+import { installWalletRoutes, debitForGame, creditGameResult } from './server/wallet.js';
+import { ensureMongoSchema, pingMongo, closeMongo } from './server/mongo-store.js';
+import { installGameRoutes } from './server/games.js';
+import { installProgressionRoutes } from './server/progression.js';
+import { installChatRoutes, startChatRetentionWorker, saveChatMessage } from './server/social.js';
+import { installAdminRoutes } from './server/admin.js';
+import { installGtpsRoutes } from './server/gtps.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,7 +21,18 @@ const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 
 // Enable JSON body parsing
-app.use(express.json());
+app.use(express.json({ limit: '64kb' }));
+app.disable('x-powered-by');
+app.use((req,res,next)=>{
+  const requestId=String(req.headers['x-request-id']||'').slice(0,128) || crypto.randomUUID();
+  res.setHeader('X-Request-Id',requestId);
+  res.setHeader('X-Content-Type-Options','nosniff');
+  res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy','camera=(), microphone=(), geolocation=()');
+  res.setHeader('Content-Security-Policy',"default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; font-src 'self' data:");
+  if(req.secure || String(req.headers['x-forwarded-proto']||'').includes('https')) res.setHeader('Strict-Transport-Security','max-age=31536000; includeSubDomains');
+  next();
+});
 
 // Health check endpoint for Render.com
 app.get('/healthz', (req, res) => {
@@ -24,18 +44,27 @@ app.get('/healthz', (req, res) => {
   });
 });
 
+app.get('/readyz', async (req,res) => {
+  try {
+    await pingMongo();
+    res.json({status:'ready',storage:'sqlite',timestamp:new Date().toISOString()});
+  } catch (error) {
+    res.status(503).json({status:'not_ready',error:'persistent_store_unavailable'});
+  }
+});
+
 // Serve Vite production build from dist/
 const distPath = path.join(__dirname, 'dist');
 app.use(express.static(distPath));
 
 // In-memory real-time state for live chat & bets & GTPS
-const MAX_HISTORY = 100;
-const liveChatHistory = [];
 const liveBetsHistory = [];
+const stopChatRetentionWorker = startChatRetentionWorker();
+const saveEphemeralChatFromWebSocket = async (user, text) => saveChatMessage({ userId:user.id, username:user.username, message:text });
 const activeBattles = [];
 
-let gtpsConfig = {
-  secretKey: 'supreme_gtps_secret_auth_token_25741',
+const gtpsConfig = {
+  secretKey: process.env.GTPS_WEBHOOK_SECRET || '',
   status: 'online',
   activeSyncCount: 0,
 };
@@ -45,201 +74,38 @@ let gtpsConfig = {
 const GTPS_BRIDGE_PORT = process.env.GTPS_PORT || 18876;
 const GTPS_BRIDGE_URL = `https://api.gtps.cloud/g-api/${GTPS_BRIDGE_PORT}`;
 
-// GTPS API Endpoints
-app.get('/api/gtps/status', (req, res) => {
-  res.json({
-    status: gtpsConfig.status,
-    syncCount: gtpsConfig.activeSyncCount,
-  });
+installProgressionRoutes(app, { sessionUser });
+installAdminRoutes(app, { sessionUser });
+installGtpsRoutes(app, { getGtpsSecret: () => gtpsConfig.secretKey });
+
+installChatRoutes(app, { sessionUser, broadcast });
+
+installWalletRoutes(app, {
+  sessionUser,
+  getGtpsSecret: () => gtpsConfig.secretKey,
+  gtpsBridgeUrl: GTPS_BRIDGE_URL,
+  broadcast,
 });
 
-app.post('/api/gtps/deposit-webhook', (req, res) => {
-  const { growId, currency, amount, secretKey } = req.body;
-  if (secretKey !== gtpsConfig.secretKey) {
-    return res.status(403).json({ error: 'Invalid secret key' });
-  }
-  console.log(`[GTPS Deposit] Received ${amount} ${currency} from ${growId}`);
-  gtpsConfig.activeSyncCount++;
-
-  // Broadcast deposit notification to all connected clients
-  broadcast({
-    type: 'GTPS_DEPOSIT',
-    payload: {
-      growId: growId || 'Unknown',
-      currency: currency || 'BGL',
-      amount: Number(amount) || 0,
-      timestamp: Date.now(),
-    },
-  });
-
-  res.json({ success: true, growId, currency, amount });
+installEconomyRoutes(app, {
+  gtpsBridgeUrl: GTPS_BRIDGE_URL,
+  getGtpsSecret: () => gtpsConfig.secretKey,
+  broadcast,
 });
 
-app.post('/api/gtps/withdraw-webhook', (req, res) => {
-  const { growId, currency, amount, secretKey } = req.body;
-  if (secretKey !== gtpsConfig.secretKey) {
-    return res.status(403).json({ error: 'Invalid secret key' });
+const installGamesPromise = installGameRoutes(app, {
+  sessionUser,
+  debitForGame: async (...args) => {
+    const result = await debitForGame(...args);
+    if (result?.ok) broadcast({ type: 'LIVE_BET', payload: { referenceId: result.referenceId, gameId: args[2], username: result.username || undefined, amountDls: args[1], timestamp: Date.now() } });
+    return result;
+  },
+  creditGameResult: async (...args) => {
+    const result = await creditGameResult(...args);
+    if (result?.ok && !result.duplicate) broadcast({ type: 'GAME_SETTLED', payload: { userId: args[0], amountDls: args[1], gameId: args[2]?.gameId || 'unknown', timestamp: Date.now() } });
+    return result;
   }
-  console.log(`[GTPS Withdraw] Requested ${amount} ${currency} for ${growId}`);
-  gtpsConfig.activeSyncCount++;
-
-  res.json({ success: true, growId, currency, amount, status: 'dispatched' });
-});
-
-// In-memory registered link codes from website accounts (code -> { username, code, growId, timestamp })
-const registeredLinkCodes = new Map();
-const linkedGrowIds = new Map(); // code -> growId
-
-app.post('/api/gtps/register-code', (req, res) => {
-  const { username, code, growId } = req.body;
-  if (!code) return res.status(400).json({ error: 'Code required' });
-  const cleanCode = String(code).trim();
-  registeredLinkCodes.set(cleanCode, {
-    username: username || 'User',
-    code: cleanCode,
-    growId: growId || null,
-    timestamp: Date.now(),
-  });
-
-  res.json({ success: true, code: cleanCode, registered: true });
-});
-
-// Lua menanyakan status kode saat player /link <kode>.
-// registered:true + username dipakai Lua untuk menamai akun casino di sisi game.
-app.get('/api/gtps/check-link', (req, res) => {
-  const code = String(req.query.code || '').trim();
-  if (!code) return res.json({ linked: false });
-
-  // 1. Sudah pernah link (webhook dari Lua pernah masuk)
-  if (linkedGrowIds.has(code)) {
-    const growId = linkedGrowIds.get(code);
-    return res.json({ linked: true, growId, code });
-  }
-
-  // 2. Kode terdaftar dari akun web -> kirim username-nya ke Lua
-  const reg = registeredLinkCodes.get(code);
-  if (reg) {
-    return res.json({ linked: false, registered: true, username: reg.username, code });
-  }
-
-  res.json({ linked: false, code });
-});
-
-app.post('/api/gtps/link-growid', (req, res) => {
-  const { growid, code } = req.body;
-  const cleanCode = String(code || '').trim();
-  const cleanGrowId = String(growid || '').trim();
-  console.log(`[GTPS Link] GrowID ${cleanGrowId} linked with code ${cleanCode}`);
-
-  if (cleanCode && cleanGrowId) {
-    linkedGrowIds.set(cleanCode, cleanGrowId);
-  }
-
-  broadcast({
-    type: 'GTPS_LINK',
-    payload: { growId: cleanGrowId, code: cleanCode, timestamp: Date.now() },
-  });
-
-  res.json({ success: true, growId: cleanGrowId, code: cleanCode });
-});
-
-app.get('/api/gtps/balance/:growid', (req, res) => {
-  res.json({ success: true, growId: req.params.growid, status: 'active' });
-});
-
-// Withdraw dari web -> bridge Lua -> item langsung masuk backpack in-game.
-// Bridge memvalidasi secretKey + saldo ledger di sisi game (anti double-spend).
-app.post('/api/gtps/withdraw-request', async (req, res) => {
-  const { growId, currency = 'DL', amount } = req.body;
-  const cleanGrowId = String(growId || '').trim();
-  const amt = Number(amount) || 0;
-
-  if (!cleanGrowId || amt <= 0 || !Number.isInteger(amt)) {
-    return res.status(400).json({ ok: false, error: 'growId dan amount (bilangan bulat) wajib diisi' });
-  }
-
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    const bridgeRes = await fetch(`${GTPS_BRIDGE_URL}/supreme/withdraw`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        secretKey: gtpsConfig.secretKey,
-        growId: cleanGrowId,
-        currency: String(currency).toUpperCase(),
-        amount: amt,
-      }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-
-    const data = await bridgeRes.json().catch(() => ({ ok: false, error: 'bridge_invalid_response' }));
-    console.log(`[GTPS Bridge] withdraw ${amt} ${String(currency).toUpperCase()} -> ${cleanGrowId}: ${bridgeRes.status} ${JSON.stringify(data)}`);
-    return res.status(bridgeRes.status).json(data);
-  } catch (err) {
-    console.error('[GTPS Bridge] unreachable:', err.message);
-    return res.status(502).json({ ok: false, error: 'bridge_unreachable' });
-  }
-});
-
-// Player /unlink di game -> lepas link di sisi web juga
-app.post('/api/gtps/unlink', (req, res) => {
-  const { growid, secretKey } = req.body;
-  if (secretKey !== gtpsConfig.secretKey) {
-    return res.status(403).json({ error: 'Invalid secret key' });
-  }
-  const cleanGrowId = String(growid || '').trim();
-  if (!cleanGrowId) return res.status(400).json({ error: 'growid required' });
-
-  for (const [code, gid] of Array.from(linkedGrowIds.entries())) {
-    if (String(gid).toLowerCase() === cleanGrowId.toLowerCase()) {
-      linkedGrowIds.delete(code);
-    }
-  }
-
-  broadcast({ type: 'GTPS_UNLINK', payload: { growId: cleanGrowId, timestamp: Date.now() } });
-  console.log(`[GTPS Unlink] ${cleanGrowId} unlinked from in-game`);
-  res.json({ success: true, growId: cleanGrowId });
-});
-
-// Tombol Unlink di wallet web -> lepas link web + bridge ke Lua
-// Validasi: kode link harus terdaftar (kode di-re-register tiap wallet dibuka),
-// jadi unlink tetap jalan meski cache link di memori hilang setelah restart.
-app.post('/api/gtps/unlink-web', async (req, res) => {
-  const { code, growId } = req.body;
-  const cleanCode = String(code || '').trim();
-  const cleanGrowId = String(growId || '').trim();
-  if (!cleanGrowId || !cleanCode) {
-    return res.status(400).json({ ok: false, error: 'code dan growId wajib' });
-  }
-
-  if (!registeredLinkCodes.has(cleanCode)) {
-    return res.status(403).json({ ok: false, error: 'kode_link_tidak_dikenal' });
-  }
-
-  const linked = linkedGrowIds.get(cleanCode);
-  if (!linked || String(linked).toLowerCase() === cleanGrowId.toLowerCase()) {
-    linkedGrowIds.delete(cleanCode);
-  }
-
-  // Lepaskan juga link di sisi game (bridge Lua)
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    await fetch(`${GTPS_BRIDGE_URL}/supreme/unlink`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ secretKey: gtpsConfig.secretKey, growId: cleanGrowId }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-  } catch {}
-
-  broadcast({ type: 'GTPS_UNLINK', payload: { growId: cleanGrowId, timestamp: Date.now() } });
-  console.log(`[GTPS Unlink] ${cleanGrowId} unlinked from website (code ${cleanCode})`);
-  res.json({ ok: true, growId: cleanGrowId });
-});
+}, { broadcast });
 
 // Real-Time WebSocket Server
 const wss = new WebSocketServer({ server, path: '/ws' });
@@ -253,51 +119,73 @@ function broadcast(data, excludeWs = null) {
   }
 }
 
-wss.on('connection', (ws) => {
-  // Send initial real state upon connecting
-  ws.send(
-    JSON.stringify({
-      type: 'INIT_STATE',
-      payload: {
-        chatHistory: liveChatHistory.slice(-50),
-        liveBets: liveBetsHistory.slice(0, 30),
-        activeBattles: activeBattles.filter((b) => b.status === 'open'),
-      },
-    })
-  );
+const wsRate = new WeakMap();
+wss.on('connection', async (ws, req) => {
+  const user = await sessionUser(req).catch(() => null);
+  if (!user) {
+    ws.close(1008, 'authentication_required');
+    return;
+  }
+  if (user.isBanned) {
+    ws.close(1008, 'account_banned');
+    return;
+  }
 
+  ws.send(JSON.stringify({
+    type: 'INIT_STATE',
+    payload: {
+      chatHistory: [],
+      liveBets: liveBetsHistory.slice(0, 30),
+      activeBattles: activeBattles.filter((b) => b.status === 'open'),
+    },
+  }));
+
+  wsRate.set(ws,{count:0,resetAt:Date.now()+10000});
   ws.on('message', (raw) => {
     try {
-      const message = JSON.parse(raw.toString());
-
-      if (message.type === 'CHAT_MESSAGE') {
-        const chatItem = message.payload;
-        liveChatHistory.push(chatItem);
-        if (liveChatHistory.length > MAX_HISTORY) liveChatHistory.shift();
-        broadcast({ type: 'CHAT_MESSAGE', payload: chatItem });
-      } else if (message.type === 'LIVE_BET') {
-        const betItem = message.payload;
-        liveBetsHistory.unshift(betItem);
-        if (liveBetsHistory.length > MAX_HISTORY) liveBetsHistory.pop();
-        broadcast({ type: 'LIVE_BET', payload: betItem });
-      } else if (message.type === 'BATTLE_CREATE') {
-        const battle = message.payload;
-        activeBattles.unshift(battle);
-        broadcast({ type: 'BATTLE_CREATED', payload: battle });
-      } else if (message.type === 'BATTLE_UPDATE') {
-        const updated = message.payload;
-        const idx = activeBattles.findIndex((b) => b.id === updated.id);
-        if (idx !== -1) {
-          activeBattles[idx] = updated;
-        } else {
-          activeBattles.unshift(updated);
-        }
-        broadcast({ type: 'BATTLE_UPDATED', payload: updated });
+      if (raw.length > 8192) {
+        ws.send(JSON.stringify({type:'ERROR',payload:{error:'message_too_large'}}));
+        return;
       }
+      const rate=wsRate.get(ws);
+      const now=Date.now();
+      if (now>=rate.resetAt) { rate.count=0; rate.resetAt=now+10000; }
+      rate.count += 1;
+      if (rate.count > 20) {
+        ws.send(JSON.stringify({type:'ERROR',payload:{error:'rate_limited'}}));
+        return;
+      }
+      const message = JSON.parse(raw.toString());
+      if (message.type !== 'CHAT_MESSAGE') {
+        if (message.type === 'LIVE_BET' || message.type === 'BATTLE_CREATE' || message.type === 'BATTLE_UPDATE') {
+          ws.send(JSON.stringify({ type:'ERROR', payload:{ error:'server_authoritative_event' } }));
+        }
+        return;
+      }
+
+      if (user.isMuted) {
+        ws.send(JSON.stringify({ type:'ERROR', payload:{ error:'account_muted' } }));
+        return;
+      }
+
+      const incoming = message.payload && typeof message.payload === 'object' ? message.payload : {};
+      const text = String(incoming.message || incoming.text || '').trim().slice(0, 500);
+      if (!text) return;
+
+      const chatItem = {
+        id: crypto.randomUUID(),
+        userId: user.id,
+        username: user.username,
+        message: text,
+        createdAt: new Date().toISOString(),
+      };
+      saveEphemeralChatFromWebSocket(user, text).catch((error) => console.error('[Social] WS chat persistence failed:', error));
+      broadcast({ type: 'CHAT_MESSAGE', payload: { ...chatItem, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() } });
     } catch (err) {
       console.error('WS parse error:', err);
     }
   });
+  ws.on('close',()=>wsRate.delete(ws));
 });
 
 // SPA fallback: send index.html for any client-side routes
@@ -305,7 +193,20 @@ app.use((req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
 
-server.listen(PORT, () => {
-  console.log(`[Supreme Casino] Server running on port ${PORT}`);
-  console.log(`[Supreme Casino] Healthcheck: http://localhost:${PORT}/healthz`);
-});
+const shutdown = (signal) => { console.log(`[Supreme Casino] ${signal} received; shutting down`); stopChatRetentionWorker(); server.close(async () => { await closeMongo().catch(()=>{}); process.exit(0); }); setTimeout(() => process.exit(1), 10000).unref(); };
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+(async () => {
+  try {
+    await ensureMongoSchema();
+    await installGamesPromise;
+    server.listen(PORT, () => {
+      console.log(`[GTIND-CSN] Server running on port ${PORT}`);
+      console.log(`[GTIND-CSN] SQLite storage ready. Healthcheck: http://localhost:${PORT}/healthz`);
+    });
+  } catch (error) {
+    console.error('[GTIND-CSN] SQLite initialization failed:', error);
+    process.exitCode = 1;
+  }
+})();

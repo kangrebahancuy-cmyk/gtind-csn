@@ -68,6 +68,8 @@ export const KenoGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     user,
     setAuthModalOpen,
     checkCanPlayGame,
+    startGameRound,
+    resolveGameRound,
   } = useGame();
 
   const [betMode, setBetMode] = useState<'manual' | 'auto'>('manual');
@@ -109,68 +111,23 @@ export const KenoGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   };
 
   // Play Keno: Draw 10 numbers sequentially
-  const playKeno = () => {
-    if (!user.isAuthenticated) {
-      setAuthModalOpen(true);
-      return;
-    }
-
-    if (!checkCanPlayGame('keno', 'Keno')) return;
-
-    if (drawing || selectedNumbers.length === 0) return;
-
-    const b = fromActiveAmount(Number(bet));
-    if (!b || b <= 0 || !deductBet(b)) return;
-
-    sound.playClick();
-    setDrawing(true);
-    setDrawnNumbers([]);
-    setHitCount(0);
-    setPayoutResult(null);
-    setCashedOutInfo(null);
-
-    // Pick 10 unique winning numbers (1-40)
-    const winningDrawn: number[] = [];
-    while (winningDrawn.length < 10) {
-      const pick = Math.floor(Math.random() * 40) + 1;
-      if (!winningDrawn.includes(pick)) winningDrawn.push(pick);
-    }
-
-    let hitsSoFar = 0;
-    winningDrawn.forEach((drawnNum, idx) => {
-      setTimeout(() => {
-        setDrawnNumbers((prev) => [...prev, drawnNum]);
-
-        if (selectedNumbers.includes(drawnNum)) {
-          hitsSoFar++;
-          setHitCount(hitsSoFar);
-          sound.playGem();
-        }
-
-        // Final draw step
-        if (idx === winningDrawn.length - 1) {
-          setTimeout(() => {
-            setDrawing(false);
-            const picks = selectedNumbers.length;
-            const paytable = KENO_PAYTABLES[risk][picks] || {};
-            const multiplier = paytable[hitsSoFar] || 0;
-
-            if (multiplier > 0) {
-              const wonDls = b * multiplier;
-              awardPayout(wonDls, 'Keno', multiplier, b);
-              setPayoutResult({ multiplier, won: true });
-              setCashedOutInfo({ multiplier, payout: wonDls });
-              sound.playCashout();
-              sound.playWin();
-            } else {
-              recordLoss(b, 'Keno');
-              setPayoutResult({ multiplier: 0, won: false });
-              sound.playExplosion();
-            }
-          }, 350);
-        }
-      }, (idx + 1) * 200);
-    });
+  const playKeno = async () => {
+    if (!user.isAuthenticated) { setAuthModalOpen(true); return; }
+    if (!checkCanPlayGame('keno', 'Keno') || drawing || selectedNumbers.length === 0) return;
+    const b = fromActiveAmount(Number(bet)); if (!b || b <= 0) return;
+    sound.playClick(); setDrawing(true); setDrawnNumbers([]); setHitCount(0); setPayoutResult(null); setCashedOutInfo(null);
+    const started = await startGameRound('keno', b);
+    if (!started.success || !started.roundId) { setDrawing(false); return; }
+    const resolved = await resolveGameRound(started.roundId, { picks:selectedNumbers, risk });
+    if (!resolved.success || !resolved.result) { setDrawing(false); return; }
+    const drawn = Array.isArray(resolved.result.drawn) ? resolved.result.drawn : [];
+    drawn.forEach((n:number,i:number)=>setTimeout(()=>{ setDrawnNumbers(p=>[...p,n]); if(selectedNumbers.includes(n)){setHitCount(c=>c+1);sound.playGem();} },i*200));
+    setTimeout(()=>{
+      const hits=Number(resolved.result.hits||0), mult=Number(resolved.result.multiplier||0), payout=Number(resolved.payoutDls||0);
+      setDrawing(false); setHitCount(hits);
+      if(mult>0){setPayoutResult({multiplier:mult,won:true});setCashedOutInfo({multiplier:mult,payout});sound.playCashout();sound.playWin();}
+      else {setPayoutResult({multiplier:0,won:false});sound.playExplosion();}
+    }, drawn.length*200+350);
   };
 
   const picksCount = selectedNumbers.length;

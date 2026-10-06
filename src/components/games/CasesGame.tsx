@@ -280,8 +280,14 @@ export const CasesGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const saveCases = (newList: CustomCase[]) => {
     setCasesList(newList);
     localStorage.setItem('voidps_custom_cases_v2', JSON.stringify(newList));
+    if (isCurrentAdmin) Promise.all(newList.map(c=>fetch('/api/games/cases/catalog',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({case:c})}).catch(()=>null)));
   };
 
+  useEffect(() => {
+    fetch('/api/games/cases/catalog',{credentials:'include'}).then(r=>r.json()).then(d=>{
+      if(Array.isArray(d?.cases)){setCasesList(d.cases);if(selectedCase){const fresh=d.cases.find((c:any)=>c.id===selectedCase.id);if(fresh)setSelectedCase(fresh);}}
+    }).catch(()=>{});
+  }, []);
   // Navigation: Catalog vs Case Detail
   const [selectedCase, setSelectedCase] = useState<CustomCase | null>(null);
 
@@ -329,7 +335,7 @@ export const CasesGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [itemPickerSearch, setItemPickerSearch] = useState<string>('');
   const [itemSortOrder, setItemSortOrder] = useState<'asc' | 'desc'>('asc');
 
-  const isCurrentAdmin = isAdmin || user.username.toLowerCase() === 'admin99';
+  const isCurrentAdmin = isAdmin;
 
   // Automatically calculate price from newCaseItems
   const calculatedNewCasePrice = useMemo(() => {
@@ -409,13 +415,20 @@ export const CasesGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   // =========================================================================
   const WIN_INDEX = 50;
 
-  const startSpin = (isDemo: boolean = false) => {
+  const startSpin = async (isDemo: boolean = false) => {
     if (spinning || !selectedCase || selectedCase.items.length === 0) return;
     if (!isDemo && !checkCanPlayGame('cases', 'Cases')) return;
 
     const totalPrice = selectedCase.price * caseCount;
+    let serverWinners: CaseItemDrop[] = [];
+    let serverRoundId: string | null = null;
     if (!isDemo) {
-      if (!deductBet(totalPrice)) return;
+      const start = await fetch('/api/games/start',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({gameId:'cases',betDls:totalPrice,caseId:selectedCase.id,count:caseCount})}).then(r=>r.json()).catch(()=>null);
+      if(!start?.ok||!start.roundId)return;
+      serverRoundId=start.roundId;
+      const resolved=await fetch('/api/games/resolve',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({roundId:serverRoundId,action:{final:true}})}).then(r=>r.json()).catch(()=>null);
+      if(!resolved?.ok||!Array.isArray(resolved.result?.winners))return;
+      serverWinners=resolved.result.winners;
     }
 
     setWonModalOpen(false);
@@ -429,7 +442,7 @@ export const CasesGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
     // 1. Generate winners & 72-card strips for each active reel
     for (let c = 0; c < caseCount; c++) {
-      let rand = Math.random() * totalWeight;
+      if(serverWinners[c]) { winners.push(serverWinners[c]); } else { let rand = Math.random() * totalWeight;
       let winner = items[0];
       for (const it of items) {
         if (rand <= (it.chance || 1)) {
@@ -438,7 +451,7 @@ export const CasesGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         }
         rand -= (it.chance || 1);
       }
-      winners.push(winner);
+      winners.push(winner); }
 
       const strip: CaseItemDrop[] = [];
       for (let i = 0; i < 72; i++) {
@@ -520,13 +533,7 @@ export const CasesGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       sound.playWin();
 
       if (!isDemo) {
-        const totalWon = winners.reduce((sum, w) => sum + w.price, 0);
-        awardPayout(
-          totalWon,
-          `Unboxed ${caseCount}x ${selectedCase.name}`,
-          Number((totalWon / totalPrice).toFixed(2)),
-          totalPrice
-        );
+        // Settlement already happened on the server. Never credit client-side.
       }
     }, 4900);
   };
@@ -534,7 +541,7 @@ export const CasesGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   // Admin: Open Creator Modal
   const handleOpenAdminCreate = (caseToEdit?: CustomCase) => {
     if (!isCurrentAdmin) {
-      showToast('Admin access required. Log in with username admin99 / password admin001', 'error', 'Admin Only');
+      showToast('Admin access required.', 'error', 'Admin Only');
       return;
     }
 

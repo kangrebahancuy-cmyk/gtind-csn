@@ -72,6 +72,8 @@ export const BlackjackGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     user,
     setAuthModalOpen,
     checkCanPlayGame,
+    startGameRound,
+    resolveGameRound,
   } = useGame();
 
   const [betMode, setBetMode] = useState<'manual' | 'auto'>('manual');
@@ -83,6 +85,7 @@ export const BlackjackGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   // Game states: 'betting' | 'dealing' | 'player_turn' | 'dealer_turn' | 'finished'
   const [gameState, setGameState] = useState<'betting' | 'dealing' | 'player_turn' | 'dealer_turn' | 'finished'>('betting');
   const [roundBet, setRoundBet] = useState(0);
+  const [roundId, setRoundId] = useState<string | null>(null);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
   const [resultTone, setResultTone] = useState<'win' | 'loss' | 'push' | null>(null);
 
@@ -92,186 +95,45 @@ export const BlackjackGame: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   ).score;
 
   // 1. Realistic Sequential Deal with Card Sounds and Staggered Animations
-  const dealHand = () => {
-    if (!user.isAuthenticated) {
-      setAuthModalOpen(true);
-      return;
-    }
-
-    if (!checkCanPlayGame('blackjack', 'Blackjack')) {
-      return;
-    }
-
-    const b = fromActiveAmount(Number(bet));
-    if (!b || b <= 0 || !deductBet(b)) return;
-
-    const newDeck = createShuffledDeck();
-    const p1 = newDeck.pop()!;
-    const d1 = newDeck.pop()!;
-    const p2 = newDeck.pop()!;
-    const d2 = newDeck.pop()!;
-
-    setDeck(newDeck);
-    setRoundBet(b);
-    setResultMessage(null);
-    setResultTone(null);
-    setGameState('dealing');
-    setPlayerHand([]);
-    setDealerHand([]);
-
-    // Staggered dealing sequence
-    // Card 1 -> Player
-    setTimeout(() => {
-      sound.playCard();
-      setPlayerHand([p1]);
-    }, 150);
-
-    // Card 2 -> Dealer
-    setTimeout(() => {
-      sound.playCard();
-      setDealerHand([d1]);
-    }, 380);
-
-    // Card 3 -> Player
-    setTimeout(() => {
-      sound.playCard();
-      setPlayerHand([p1, p2]);
-    }, 600);
-
-    // Card 4 -> Dealer (Face down hole card)
-    setTimeout(() => {
-      sound.playCard();
-      setDealerHand([d1, d2]);
-
-      const pScore = calculateHandScore([p1, p2]).score;
-      const dScore = calculateHandScore([d1, d2]).score;
-
-      // Evaluate Natural Blackjack (21 on deal)
-      if (pScore === 21) {
-        if (dScore === 21) {
-          setGameState('finished');
-          awardPayout(b, 'Blackjack', 1.0, b);
-          setResultMessage('Both have Blackjack! Push (Bet Refunded).');
-          setResultTone('push');
-        } else {
-          setGameState('finished');
-          const payout = b * 2.5;
-          awardPayout(payout, 'Blackjack', 2.5, b);
-          setResultMessage('NATURAL BLACKJACK! Paid 3:2 (+50% bonus)');
-          setResultTone('win');
-          sound.playWin();
-          sound.playCashout();
-        }
-        return;
-      }
-
-      setGameState('player_turn');
-    }, 850);
+  const dealHand = async () => {
+    if (!user.isAuthenticated) { setAuthModalOpen(true); return; }
+    if (!checkCanPlayGame('blackjack','Blackjack')) return;
+    const b=fromActiveAmount(Number(bet)); if(!b||b<=0)return;
+    const started=await startGameRound('blackjack',b); if(!started.success||!started.roundId)return;
+    setRoundId(started.roundId);setRoundBet(b);setResultMessage(null);setResultTone(null);setGameState('dealing');setPlayerHand([]);setDealerHand([]);
+    const resolved=await resolveGameRound(started.roundId,{type:'initial'});
+    if(!resolved.success||!resolved.result)return;
+    const rr=resolved.result; setPlayerHand(rr.player||[]);setDealerHand(rr.dealer||[]);setGameState(rr.phase==='finished'?'finished':'player_turn');
+    if(rr.phase==='finished'){const p=Number(rr.payoutDls||0);setResultTone(p>0?'win':'push');setResultMessage(p>0?'NATURAL BLACKJACK!':'Both have Blackjack! Push (Bet Refunded).');setRoundId(null);}
   };
 
   // 2. Player Action: HIT
-  const hit = () => {
-    if (gameState !== 'player_turn' || deck.length === 0) return;
-
-    sound.playCard();
-    const newDeck = [...deck];
-    const newCard = newDeck.pop()!;
-    const updatedHand = [...playerHand, newCard];
-
-    setDeck(newDeck);
-    setPlayerHand(updatedHand);
-
-    const updatedScore = calculateHandScore(updatedHand).score;
-    if (updatedScore > 21) {
-      setGameState('finished');
-      setResultMessage(`Bust with ${updatedScore}! Round lost.`);
-      setResultTone('loss');
-      recordLoss(roundBet, 'Blackjack');
-      sound.playExplosion();
-    } else if (updatedScore === 21) {
-      stand(updatedHand, newDeck);
-    }
+  const hit = async () => {
+    if(gameState!=='player_turn'||!roundId)return;
+    const resolved=await resolveGameRound(roundId,{type:'hit'}); if(!resolved.success||!resolved.result)return;
+    const rr=resolved.result;setPlayerHand(rr.player||[]);setDealerHand(rr.dealer||[]);
+    if(rr.outcome==='continue'){sound.playCard();return;}
+    setGameState('finished');setRoundId(null);const p=Number(resolved.payoutDls||0);
+    if(rr.outcome==='win'){setResultTone('win');setResultMessage(`You win ${rr.score} vs ${rr.dealerScore}!`);sound.playWin();sound.playCashout();}else{setResultTone('loss');setResultMessage(`Bust with ${rr.score}!`);sound.playExplosion();}
   };
 
   // 3. Player Action: STAND (Sequential Dealer Play)
-  const stand = (currentPHand = playerHand, currentDeck = deck) => {
-    if (gameState !== 'player_turn') return;
-    setGameState('dealer_turn');
-    sound.playCard(); // Flip hole card
-
-    const pFinal = calculateHandScore(currentPHand).score;
-    let dCurrentHand = [...dealerHand];
-    let dDeck = [...currentDeck];
-
-    const dealerStep = () => {
-      const currentScore = calculateHandScore(dCurrentHand).score;
-      if (currentScore < 17 && dDeck.length > 0) {
-        sound.playCard();
-        dCurrentHand.push(dDeck.pop()!);
-        setDealerHand([...dCurrentHand]);
-        setDeck([...dDeck]);
-        setTimeout(dealerStep, 450);
-      } else {
-        // Dealer finished
-        setGameState('finished');
-        const dFinal = calculateHandScore(dCurrentHand).score;
-
-        if (dFinal > 21) {
-          const payout = roundBet * 2;
-          awardPayout(payout, 'Blackjack', 2.0, roundBet);
-          setResultMessage(`Dealer busts with ${dFinal}! You win 2.0x!`);
-          setResultTone('win');
-          sound.playCashout();
-          sound.playWin();
-        } else if (pFinal > dFinal) {
-          const payout = roundBet * 2;
-          awardPayout(payout, 'Blackjack', 2.0, roundBet);
-          setResultMessage(`You win ${pFinal} vs ${dFinal}! Paid 2.0x!`);
-          setResultTone('win');
-          sound.playCashout();
-          sound.playWin();
-        } else if (dFinal > pFinal) {
-          setResultMessage(`Dealer wins with ${dFinal} vs your ${pFinal}.`);
-          setResultTone('loss');
-          recordLoss(roundBet, 'Blackjack');
-          sound.playExplosion();
-        } else {
-          awardPayout(roundBet, 'Blackjack', 1.0, roundBet);
-          setResultMessage(`Push at ${pFinal}! Bet returned.`);
-          setResultTone('push');
-        }
-      }
-    };
-
-    setTimeout(dealerStep, 350);
+  const stand = async () => {
+    if(gameState!=='player_turn'||!roundId)return;
+    setGameState('dealer_turn');const resolved=await resolveGameRound(roundId,{type:'stand'});if(!resolved.success||!resolved.result)return;
+    const rr=resolved.result;setPlayerHand(rr.player||[]);setDealerHand(rr.dealer||[]);setGameState('finished');setRoundId(null);const p=Number(resolved.payoutDls||0);
+    if(rr.outcome==='win'){setResultTone('win');setResultMessage(`You win ${rr.score} vs ${rr.dealerScore}! Paid 2.0x!`);sound.playWin();sound.playCashout();}
+    else if(rr.outcome==='push'){setResultTone('push');setResultMessage(`Push at ${rr.score}! Bet returned.`);}
+    else{setResultTone('loss');setResultMessage(`Dealer wins with ${rr.dealerScore} vs your ${rr.score}.`);sound.playExplosion();}
   };
 
   // 4. Player Action: DOUBLE DOWN
-  const doubleDown = () => {
-    if (gameState !== 'player_turn' || playerHand.length !== 2) return;
-    if (!deductBet(roundBet)) return;
-
-    sound.playCard();
-    const newBet = roundBet * 2;
-    setRoundBet(newBet);
-
-    const newDeck = [...deck];
-    const newCard = newDeck.pop()!;
-    const updatedHand = [...playerHand, newCard];
-
-    setDeck(newDeck);
-    setPlayerHand(updatedHand);
-
-    const updatedScore = calculateHandScore(updatedHand).score;
-    if (updatedScore > 21) {
-      setGameState('finished');
-      setResultMessage(`Bust with ${updatedScore} on double down!`);
-      setResultTone('loss');
-      recordLoss(newBet, 'Blackjack');
-      sound.playExplosion();
-    } else {
-      stand(updatedHand, newDeck);
-    }
+  const doubleDown = async () => {
+    if(gameState!=='player_turn'||playerHand.length!==2||!roundId)return;
+    const resolved=await resolveGameRound(roundId,{type:'double'});if(!resolved.success||!resolved.result)return;
+    const rr=resolved.result;setPlayerHand(rr.player||[]);setDealerHand(rr.dealer||[]);setRoundBet(v=>v*2);setGameState('finished');setRoundId(null);
+    if(rr.outcome==='win'){setResultTone('win');setResultMessage(`Double win ${rr.score} vs ${rr.dealerScore}! Paid 2.0x!`);sound.playWin();sound.playCashout();}
+    else{setResultTone(rr.outcome==='push'?'push':'loss');setResultMessage(rr.outcome==='push'?'Double push — bet returned.':`Double lost with ${rr.score}.`);if(rr.outcome==='loss')sound.playExplosion();}
   };
 
   const renderCard = (card: Card, hidden = false, idx = 0) => {
